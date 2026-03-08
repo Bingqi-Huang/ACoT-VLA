@@ -1334,6 +1334,8 @@ def _reasoning2action_lora_model() -> acot_vla.ACOTConfig:
         adopt_explicit_action_reasoner=True,
         adopt_implicit_action_reasoner=True,
         downsample_based_implicit_extractor=True,
+        # increase max token len a little bit as it was truncated with 201 tokens to 200
+        max_token_len=210,
     )
 
 
@@ -2214,7 +2216,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
             os.getenv(
                 "ACOT_CHALLENGE_INIT_WEIGHTS",
-                "gs://openpi-assets-preview/checkpoints/pi05_base/params",
+                "gs://openpi-assets/checkpoints/pi05_base/params",
             )
         ),
         num_train_steps=50_000,
@@ -2255,7 +2257,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
             os.getenv(
                 "ACOT_CHALLENGE_INIT_WEIGHTS",
-                "gs://openpi-assets-preview/checkpoints/pi05_base/params",
+                "gs://openpi-assets/checkpoints/pi05_base/params",
             )
         ),
         num_train_steps=50_000,
@@ -2280,10 +2282,10 @@ _CONFIGS = [
             ),
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=10_000,
-            peak_lr=5e-5,
-            decay_steps=50_000,
-            decay_lr=5e-6,
+            warmup_steps=3_000,
+            peak_lr=4e-5,
+            decay_steps=35_000,
+            decay_lr=4e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=None,
@@ -2293,11 +2295,11 @@ _CONFIGS = [
                 "gs://openpi-assets/checkpoints/pi05_base/params",
             )
         ),
-        num_train_steps=50_000,
-        save_interval=5000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 200,
+        num_train_steps=35_000,
+        save_interval=2500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 200,
         num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
-        batch_size=18 if not os.getenv("DEBUG_MODE", default=False) == "true" else 3,
-        grad_accum_steps=4 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        batch_size=60 if not os.getenv("DEBUG_MODE", default=False) == "true" else 3,
+        grad_accum_steps=1 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         freeze_filter=_reasoning2action_lora_freeze_filter(),
     ),
 

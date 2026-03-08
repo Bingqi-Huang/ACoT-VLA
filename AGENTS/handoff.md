@@ -47,6 +47,9 @@ What changed:
 - Changed the serving Docker default to `scripts/server_routed.sh` while keeping `SERVER_SCRIPT` as an override.
 - Added `scripts/server_checkpoint.sh` for single-checkpoint test submissions such as `acot_challenge_generalist_lora_clean_desktop`.
 - Rewrote `Training_Notes.md` around the clean-desktop single-model test-server workflow instead of the full adapter-routing workflow.
+- Patched Python packaging to avoid the current `av==14.4.0` source-build failure on Ubuntu 22.04:
+  - root `pyproject.toml` now overrides `av` to `14.0.1`
+  - `packages/openpi-client/pyproject.toml` now uses `dependency-groups.dev` instead of deprecated `tool.uv.dev-dependencies`
 
 What was verified:
 

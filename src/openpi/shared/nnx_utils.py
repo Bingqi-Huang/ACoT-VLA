@@ -47,6 +47,21 @@ def module_jit(meth: Callable[P, R], *jit_args, **jit_kwargs) -> Callable[P, R]:
     return wrapper
 
 
+def module_jit_with_state(meth: Callable[P, R], *jit_args, **jit_kwargs) -> Callable[..., R]:
+    """JIT-compile an nnx.Module method while keeping state as an explicit argument."""
+    if not (inspect.ismethod(meth) and isinstance(meth.__self__, nnx.Module)):
+        raise ValueError("module_jit_with_state must only be used on bound methods of nnx.Modules.")
+
+    graphdef, _ = nnx.split(meth.__self__)
+
+    @functools.wraps(meth)
+    def fun(state: nnx.State, *args: P.args, **kwargs: P.kwargs) -> R:
+        module = nnx.merge(graphdef, state)
+        return meth.__func__(module, *args, **kwargs)
+
+    return jax.jit(fun, *jit_args, **jit_kwargs)
+
+
 @dataclasses.dataclass(frozen=True)
 class PathRegex:
     """NNX Filter that matches paths using a regex.

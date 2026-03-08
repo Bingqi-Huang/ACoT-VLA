@@ -5,6 +5,7 @@ import pathlib
 import time
 from typing import Any
 
+from flax import nnx
 import flax.traverse_util
 import jax
 import jax.numpy as jnp
@@ -36,6 +37,16 @@ TASK_ROUTING = {
     "sorting_packages_continuous": "sorting_packages",
     "clean_the_desktop": "clean_the_desktop",
 }
+
+
+def _normalize_task_name(task_name: Any) -> str | None:
+    if isinstance(task_name, np.ndarray):
+        if task_name.shape != ():
+            return None
+        task_name = task_name.item()
+    if isinstance(task_name, bytes):
+        task_name = task_name.decode()
+    return task_name if isinstance(task_name, str) else None
 
 
 def _build_policy_transforms(
@@ -129,11 +140,14 @@ class AdapterRoutedPolicy(_policy.Policy):
     ):
         self._model_config = model_config
         self._adapter_dir = pathlib.Path(adapter_dir)
-        self._base_params_flat = flax.traverse_util.flatten_dict(base_params, sep="/")
+        base_model = self._model_config.load(base_params)
+        _, self._base_state = nnx.split(base_model)
+        self._base_state_flat = flax.traverse_util.flatten_dict(self._base_state.to_pure_dict(), sep="/")
         self._adapters = self._load_adapters(self._adapter_dir)
+        self._state_cache: dict[str, nnx.State] = {}
         self._current_adapter_name: str | None = None
-        self._current_model: _model.BaseModel | None = None
-        self._sample_actions = None
+        self._current_state: nnx.State | None = None
+        self._sample_actions = nnx_utils.module_jit_with_state(base_model.sample_actions)
         self._input_transform = _transforms.compose(transforms)
         self._output_transform = _transforms.compose(output_transforms)
         self._rng = rng or jax.random.key(0)
@@ -154,21 +168,28 @@ class AdapterRoutedPolicy(_policy.Policy):
             return "_default" if "_default" in self._adapters else "_base"
         return TASK_ROUTING.get(task_name, "_default" if "_default" in self._adapters else "_base")
 
+    def _build_state(self, adapter_name: str) -> nnx.State:
+        cached_state = self._state_cache.get(adapter_name)
+        if cached_state is not None:
+            return cached_state
+
+        merged_params = dict(self._base_state_flat)
+        merged_params.update(copy.deepcopy(self._adapters.get(adapter_name, {})))
+        state = copy.deepcopy(self._base_state)
+        state.replace_by_pure_dict(flax.traverse_util.unflatten_dict(merged_params, sep="/"))
+        self._state_cache[adapter_name] = state
+        return state
+
     def _activate_adapter(self, adapter_name: str) -> None:
         if adapter_name == self._current_adapter_name:
             return
 
-        merged_params = dict(self._base_params_flat)
-        merged_params.update(copy.deepcopy(self._adapters.get(adapter_name, {})))
-        model_params = flax.traverse_util.unflatten_dict(merged_params, sep="/")
-
         logger.info("Activating adapter: %s", adapter_name)
-        self._current_model = self._model_config.load(model_params)
-        self._sample_actions = nnx_utils.module_jit(self._current_model.sample_actions)
+        self._current_state = self._build_state(adapter_name)
         self._current_adapter_name = adapter_name
 
     def infer(self, obs: dict) -> dict:  # type: ignore[misc]
-        task_name = jax.tree.map(lambda x: x, obs).get("task_name", None)
+        task_name = _normalize_task_name(jax.tree.map(lambda x: x, obs).get("task_name", None))
         self._activate_adapter(self._resolve_adapter_name(task_name))
 
         inputs = jax.tree.map(lambda x: x, obs)
@@ -178,8 +199,8 @@ class AdapterRoutedPolicy(_policy.Policy):
         start_time = time.monotonic()
         self._rng, sample_rng = jax.random.split(self._rng)
         outputs = {"state": inputs["state"]}
-        assert self._sample_actions is not None
-        result = self._sample_actions(sample_rng, _model.Observation.from_dict(inputs), **self._sample_kwargs)
+        assert self._current_state is not None
+        result = self._sample_actions(self._current_state, sample_rng, _model.Observation.from_dict(inputs), **self._sample_kwargs)
 
         if isinstance(result, dict):
             outputs.update(result)

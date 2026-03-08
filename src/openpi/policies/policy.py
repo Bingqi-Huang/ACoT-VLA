@@ -18,6 +18,7 @@ from openpi.shared import array_typing as at
 from openpi.shared import nnx_utils
 
 BasePolicy: TypeAlias = _base_policy.BasePolicy
+logger = logging.getLogger(__name__)
 
 
 class Policy(BasePolicy):
@@ -76,7 +77,11 @@ class Policy(BasePolicy):
         if task_name is None:
             return outputs
 
-        print(f"Policy infering for task: {task_name}, with inference time: {outputs['policy_timing']['infer_ms']:.3f} ms")
+        logger.debug(
+            "Policy inferring for task=%s infer_ms=%.3f",
+            task_name,
+            outputs["policy_timing"]["infer_ms"],
+        )
         if task_name not in task_name_requiring_waist:
             # cut off waist actions for tasks that don't require it
             outputs["actions"] = outputs["actions"][:, :16]

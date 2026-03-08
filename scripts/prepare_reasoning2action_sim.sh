@@ -17,7 +17,13 @@ extract_stream() {
   fi
 
   echo "Extracting ${prefix} for $(basename "$src_dir")"
-  cat "${parts[@]}" | tar -xzf - -C "$dst_dir"
+  if cat "${parts[@]}" | tar -xzf - -C "$dst_dir"; then
+    echo "Successfully extracted ${prefix}, now deleting source files..."
+    rm "${parts[@]}"
+  else
+    echo "Error extracting ${prefix} from ${src_dir}. Source files will not be deleted." >&2
+    return 1
+  fi
 }
 
 mkdir -p "$DST_ROOT"

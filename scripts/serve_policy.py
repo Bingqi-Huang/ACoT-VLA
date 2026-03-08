@@ -2,6 +2,7 @@ import dataclasses
 import enum
 import logging
 import socket
+import time
 
 import tyro
 
@@ -53,6 +54,12 @@ class Args:
     port: int = 8000
     # Record the policy's behavior for debugging.
     record: bool = False
+    # Log summarized request payloads for smoke-submission debugging.
+    log_request_summaries: bool = False
+    # Maximum number of request summaries to log unconditionally.
+    log_request_limit: int = 3
+    # Maximum number of prompt characters to include in the request summary.
+    prompt_preview_chars: int = 120
 
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
@@ -91,6 +98,15 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
 }
 
 
+def resolve_checkpoint(args: Args) -> Checkpoint | None:
+    """Resolve the checkpoint used by the current args for logging/debugging."""
+    match args.policy:
+        case Checkpoint():
+            return args.policy
+        case Default():
+            return DEFAULT_CHECKPOINT.get(args.env)
+
+
 def create_default_policy(env: EnvMode, *, default_prompt: str | None = None) -> _policy.Policy:
     """Create a default policy for the given environment."""
     if checkpoint := DEFAULT_CHECKPOINT.get(env):
@@ -112,7 +128,16 @@ def create_policy(args: Args) -> _policy.Policy:
 
 
 def main(args: Args) -> None:
+    checkpoint = resolve_checkpoint(args)
+    load_start = time.monotonic()
+    logging.info(
+        "Loading policy: env=%s config=%s checkpoint_dir=%s",
+        args.env.value,
+        checkpoint.config if checkpoint else "<custom>",
+        checkpoint.dir if checkpoint else "<custom>",
+    )
     policy = create_policy(args)
+    load_ms = (time.monotonic() - load_start) * 1000
     policy_metadata = policy.metadata
 
     # Record the policy's behavior.
@@ -121,13 +146,23 @@ def main(args: Args) -> None:
 
     hostname = socket.gethostname()
     local_ip = socket.gethostbyname(hostname)
-    logging.info("Creating server (host: %s, ip: %s)", hostname, local_ip)
+    logging.info(
+        "Policy loaded in %.1f ms; creating server (host: %s, ip: %s, port: %d, metadata_keys=%s)",
+        load_ms,
+        hostname,
+        local_ip,
+        args.port,
+        sorted(policy_metadata.keys()),
+    )
 
     server = websocket_policy_server.WebsocketPolicyServer(
         policy=policy,
         host="0.0.0.0",
         port=args.port,
         metadata=policy_metadata,
+        log_request_summaries=args.log_request_summaries,
+        log_request_limit=args.log_request_limit,
+        prompt_preview_chars=args.prompt_preview_chars,
     )
     server.serve_forever()
 

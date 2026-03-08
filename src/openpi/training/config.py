@@ -2214,7 +2214,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
             os.getenv(
                 "ACOT_CHALLENGE_INIT_WEIGHTS",
-                "gs://openpi-assets-preview/checkpoints/pi05_droid/params",
+                "gs://openpi-assets-preview/checkpoints/pi05/params",
             )
         ),
         num_train_steps=50_000,

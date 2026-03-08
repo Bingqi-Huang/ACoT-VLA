@@ -6,6 +6,7 @@ import socket
 import tyro
 
 from openpi.policies import policy as _policy
+from openpi.policies import adapter_routed_policy as _adapter_routed_policy
 from openpi.policies import policy_config as _policy_config
 from openpi.serving import websocket_policy_server
 from openpi.training import config as _config
@@ -39,6 +40,15 @@ class Default:
 
 
 @dataclasses.dataclass
+class AdapterRouted:
+    """Load a task-routed policy with compact adapters."""
+
+    config: str
+    base_checkpoint: str
+    adapter_dir: str
+
+
+@dataclasses.dataclass
 class Args:
     """Arguments for the serve_policy script."""
 
@@ -55,7 +65,7 @@ class Args:
     record: bool = False
 
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
-    policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
+    policy: Checkpoint | Default | AdapterRouted = dataclasses.field(default_factory=Default)
 
 
 # Default checkpoints that should be used for each environment.
@@ -106,6 +116,13 @@ def create_policy(args: Args) -> _policy.Policy:
         case Checkpoint():
             return _policy_config.create_trained_policy(
                 _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+            )
+        case AdapterRouted():
+            return _adapter_routed_policy.create_adapter_routed_policy(
+                _config.get_config(args.policy.config),
+                args.policy.base_checkpoint,
+                args.policy.adapter_dir,
+                default_prompt=args.default_prompt,
             )
         case Default():
             return create_default_policy(args.env, default_prompt=args.default_prompt)

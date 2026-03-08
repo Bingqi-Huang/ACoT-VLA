@@ -31,6 +31,13 @@ What changed:
   - `ACOTConfig.get_freeze_filter()` now keeps coarse-expert LoRA trainable.
 - Added `grad_accum_steps` to `TrainConfig` and refactored `scripts/train.py` into compute/apply-grad phases so gradient accumulation works for both standard and ACoT training.
 - Added targeted tests in `src/openpi/models/acot_vla_test.py`.
+- Added `acot_challenge_generalist_lora_all` and generated `acot_specialist_*` configs in `src/openpi/training/config.py`.
+- Added adapter extraction and routed serving:
+  - `scripts/extract_adapter.py`
+  - `src/openpi/policies/adapter_routed_policy.py`
+  - `scripts/server_routed.sh`
+  - `AdapterRouted` mode in `scripts/serve_policy.py`
+- Adjusted the serving Dockerfile so `SERVER_SCRIPT` can override the launch script while preserving the current default.
 
 What was verified:
 
@@ -45,10 +52,12 @@ What is still broken or unknown:
 - No verified local closed-loop evaluation run has been recorded yet in this folder.
 - `uv run pytest` is currently blocked in this environment because dependency resolution tries to reach external package mirrors and fails.
 - The new gradient accumulation path has not yet been exercised on actual hardware.
+- The routed adapter policy currently rebuilds the model on adapter switches; this is functional but still needs runtime validation for task-switch latency.
+- No real adapter `.npz` files have been extracted and smoke-tested yet.
 
 Immediate next step:
 
-- Add the generalist + specialist LoRA configs from `AGENTS/PLAN.md`, then run a short debug training job with accumulation enabled.
+- Run a short debug training job for `acot_challenge_generalist_lora_all`, then extract one adapter and smoke-test `scripts/server_routed.sh` against it.
 
 Git note:
 

@@ -1239,6 +1239,179 @@ class TrainConfig:
             raise ValueError("Cannot resume and overwrite at the same time.")
 
 
+_REASONING2ACTION_DATA_ROOT = os.path.expanduser(
+    os.getenv("ACOT_CHALLENGE_DATA_ROOT", "~/Datasets/lerobot/Reasoning2Action-Sim")
+)
+_REASONING2ACTION_ASSETS_DIR = os.path.join(_REASONING2ACTION_DATA_ROOT, "assets")
+_REASONING2ACTION_PROMPT_MAP = {
+    "Unload workpiece_icra_SIM": ("Pour the workpiece into the box", 0.5),
+    "Turn the doorknob": ("Turn the doorknob and push the door", 0.5),
+    "Make popcorn": ("Scoop the popcorn and pour it into the popcorn bucket", 0.5),
+    "Carry the pot": ("Grasp the two handles of the pot and place it on the stove", 0.5),
+    "Insert building block holes_2_SIM": (
+        "Pick up the yellow circular block from the table, "
+        "and place it into the round hole of the block box",
+        0.2,
+    ),
+    "Remove misplaced beverages from shelves": (
+        "Pick up the incorrectly placed item from the shelf, "
+        "and place it into the shopping basket",
+        0.2,
+    ),
+    "Stock supermarket shelves  \nStraighten products  \nAttend ICRA conference  \nOperate SIM card": (
+        "Pick up the wei-chuan orange juice in the shopping basket, "
+        "and place it on the shelf. "
+        "Then, straighten the toppled wei-chuan grape juice",
+        0.2,
+    ),
+    "Sort packages": (
+        "Grab the <color> package on the table, "
+        "turn the waist right to face the barcode scanner, "
+        "place the package on the scanning table with the barcode facing up. "
+        "Then, grab the package, "
+        "rotate the waist and place the package in the blue bin. "
+        "Finally, return the waist back to face the initial table",
+        0.2,
+    ),
+    "Clear the desktop": (
+        "Pick up the pen on the left side and place it into the pen holder, "
+        "close the laptop, "
+        "pick up the tissue on the table and place it into the trash bin on the right size. "
+        "Then, pick up the mouse and place it on the right side of the laptop. "
+        "Finally, straighten the colored pencil box",
+        0.5,
+    ),
+}
+_REASONING2ACTION_SPECIALIST_SPECS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+    ("acot_specialist_pour_workpiece", ("pour_workpiece",), ("Unload workpiece_icra_SIM",)),
+    ("acot_specialist_open_door", ("open_door",), ("Turn the doorknob",)),
+    ("acot_specialist_scoop_popcorn", ("scoop_popcorn",), ("Make popcorn",)),
+    ("acot_specialist_hold_pot", ("hold_pot",), ("Carry the pot",)),
+    ("acot_specialist_place_block", ("place_block_into_box",), ("Insert building block holes_2_SIM",)),
+    ("acot_specialist_take_wrong_item", ("take_wrong_item_shelf",), ("Remove misplaced beverages from shelves",)),
+    (
+        "acot_specialist_stock_shelf",
+        ("stock_and_straighten_shelf",),
+        ("Stock supermarket shelves  \nStraighten products  \nAttend ICRA conference  \nOperate SIM card",),
+    ),
+    ("acot_specialist_sorting", ("sorting_packages_part_1", "sorting_packages_part_2"), ("Sort packages",)),
+    ("acot_specialist_clean_desktop", ("clean_the_desktop_part_1", "clean_the_desktop_part_2"), ("Clear the desktop",)),
+)
+
+
+def _reasoning2action_repo_ids(*dataset_names: str) -> list[str]:
+    return [os.path.join(_REASONING2ACTION_DATA_ROOT, dataset_name) for dataset_name in dataset_names]
+
+
+def _reasoning2action_repack_transforms() -> _transforms.Group:
+    return _transforms.Group(
+        inputs=[
+            _transforms.RepackTransform(
+                {
+                    "images": {
+                        "top_head": "observation.images.top_head",
+                        "hand_left": "observation.images.hand_left",
+                        "hand_right": "observation.images.hand_right",
+                    },
+                    "state": "observation.state",
+                    "actions": "action",
+                    "prompt": "prompt",
+                    "task": "task",
+                    "episode_index": "episode_index",
+                }
+            )
+        ]
+    )
+
+
+def _reasoning2action_lora_model() -> acot_vla.ACOTConfig:
+    return acot_vla.ACOTConfig(
+        coarse_action_horizon=30,
+        action_horizon=30,
+        paligemma_variant="gemma_2b_lora",
+        coarse_action_expert_variant="gemma_300m_lora",
+        action_expert_variant="gemma_300m_lora",
+        adopt_explicit_action_reasoner=True,
+        adopt_implicit_action_reasoner=True,
+        downsample_based_implicit_extractor=True,
+    )
+
+
+def _reasoning2action_lora_freeze_filter() -> nnx.filterlib.Filter:
+    return _reasoning2action_lora_model().get_freeze_filter(
+        freeze_vision=True,
+        freeze_llm=True,
+        freeze_llm_embedder=True,
+        freeze_dual_ae=[True, True],
+    )
+
+
+def _reasoning2action_data_config(
+    repo_ids: Sequence[str],
+    prompt_keys: Sequence[str] | None = None,
+    *,
+    asset_id: str,
+) -> LerobotACOTGo2DataConfig:
+    selected_prompt_map = (
+        _REASONING2ACTION_PROMPT_MAP
+        if prompt_keys is None
+        else {key: _REASONING2ACTION_PROMPT_MAP[key] for key in prompt_keys}
+    )
+    return LerobotACOTGo2DataConfig(
+        default_prompt="This is the icra simulation challenge baseline config. Please refer to the README for details.",
+        repo_id=list(repo_ids),
+        assets=AssetsConfig(
+            assets_dir=_REASONING2ACTION_ASSETS_DIR,
+            asset_id=asset_id,
+        ),
+        prompt_map_inject_to_training=selected_prompt_map,
+        repack_transforms=_reasoning2action_repack_transforms(),
+        base_config=DataConfig(dataloader_sampler="subtask", prompt_from_hl_instruction=True),
+        joint_action_shifts=(2, 1),
+        extra_delta_transform=(True, True),
+        delta_action_mask=_transforms.make_bool_mask(14, -18),
+    )
+
+
+def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
+    generalist_asset_id = os.getenv("ACOT_CHALLENGE_GENERALIST_ASSET_ID", "reasoning2action_sim_generalist")
+    generalist_weights = os.getenv(
+        "ACOT_CHALLENGE_GENERALIST_WEIGHTS",
+        "./checkpoints/acot_challenge_generalist_lora_all/generalist_v1/50000/params",
+    )
+
+    specialist_configs = []
+    for config_name, dataset_names, prompt_keys in _REASONING2ACTION_SPECIALIST_SPECS:
+        specialist_configs.append(
+            TrainConfig(
+                name=config_name,
+                model=_reasoning2action_lora_model(),
+                data=_reasoning2action_data_config(
+                    _reasoning2action_repo_ids(*dataset_names),
+                    prompt_keys,
+                    asset_id=generalist_asset_id,
+                ),
+                lr_schedule=_optimizer.CosineDecaySchedule(
+                    warmup_steps=500,
+                    peak_lr=2e-5,
+                    decay_steps=10_000,
+                    decay_lr=2e-6,
+                ),
+                optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+                ema_decay=0.999,
+                weight_loader=weight_loaders.CheckpointWeightLoader(generalist_weights),
+                num_train_steps=10_000,
+                save_interval=1000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
+                num_workers=16 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+                batch_size=18 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
+                grad_accum_steps=4 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+                freeze_filter=_reasoning2action_lora_freeze_filter(),
+            )
+        )
+
+    return specialist_configs
+
+
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
     #
@@ -2051,7 +2224,48 @@ _CONFIGS = [
         freeze_filter=acot_vla.ACOTConfig(paligemma_variant="gemma_2b_lora").get_freeze_filter(
             freeze_vision=False, freeze_llm=True, freeze_llm_embedder=True, freeze_dual_ae=[False, False]
         )
-    )
+    ),
+    TrainConfig(
+        name="acot_challenge_generalist_lora_all",
+        model=_reasoning2action_lora_model(),
+        data=_reasoning2action_data_config(
+            _reasoning2action_repo_ids(
+                "pour_workpiece",
+                "open_door",
+                "scoop_popcorn",
+                "hold_pot",
+                "place_block_into_box",
+                "take_wrong_item_shelf",
+                "stock_and_straighten_shelf",
+                "sorting_packages_part_1",
+                "sorting_packages_part_2",
+                "clean_the_desktop_part_1",
+                "clean_the_desktop_part_2",
+            ),
+            asset_id=os.getenv("ACOT_CHALLENGE_GENERALIST_ASSET_ID", "reasoning2action_sim_generalist"),
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=50_000,
+            decay_lr=5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
+            os.getenv(
+                "ACOT_CHALLENGE_INIT_WEIGHTS",
+                "gs://openpi-assets-preview/checkpoints/pi05_droid/params",
+            )
+        ),
+        num_train_steps=50_000,
+        save_interval=5000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 200,
+        num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        batch_size=18 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
+        grad_accum_steps=4 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        freeze_filter=_reasoning2action_lora_freeze_filter(),
+    ),
+    *_make_reasoning2action_specialist_configs(),
 ]
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):

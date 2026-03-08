@@ -19,6 +19,14 @@ Last updated: 2026-03-08
   - accumulation now works for both standard and ACoT training loops
 - Added targeted model tests for the LoRA variant and ACoT freeze-filter behavior:
   - `src/openpi/models/acot_vla_test.py`
+- Added challenge-specific LoRA training configs:
+  - `acot_challenge_generalist_lora_all`
+  - generated `acot_specialist_*` configs for the 9 challenge tasks
+- Added adapter-routing infrastructure for inference:
+  - `scripts/extract_adapter.py`
+  - `src/openpi/policies/adapter_routed_policy.py`
+  - new `AdapterRouted` serve mode in `scripts/serve_policy.py`
+  - `scripts/server_routed.sh`
 
 ## Dataset Understanding
 
@@ -46,12 +54,13 @@ Last updated: 2026-03-08
 
 - Finish or verify full extraction of all dataset parts.
 - Validate a small debug training run on the actual target machine with `grad_accum_steps > 1`.
-- Add the generalist + specialist challenge configs described in `AGENTS/PLAN.md`.
-- Implement adapter extraction and adapter-routed serving.
+- Extract adapters from a real generalist/specialist checkpoint set and verify routed loading against those files.
+- Validate the `AdapterRouted` CLI path with a real checkpoint + adapter directory.
 - Create a dedicated submission Docker path for the final chosen model.
 
 ## Verification Notes
 
 - `python3 -m py_compile` passes for the modified model/config/training files.
+- `python3 -m py_compile` passes for the modified serving and adapter files.
 - `git diff --check` passes.
 - `uv run pytest ...` could not be completed in this environment because dependency resolution attempted network access and failed on DNS/package download.

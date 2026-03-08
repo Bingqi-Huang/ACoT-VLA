@@ -27,6 +27,15 @@ Last updated: 2026-03-08
   - `src/openpi/policies/adapter_routed_policy.py`
   - new `AdapterRouted` serve mode in `scripts/serve_policy.py`
   - `scripts/server_routed.sh`
+- Fixed checkpoint norm-stats compatibility:
+  - new checkpoints now save norm stats under `assets/<asset_id>/` for policy loading
+  - loading also falls back to legacy root-level `assets/` stats for older checkpoints
+- Adapter-routed serving now uses cached per-adapter `nnx.State` overlays with a single stateful JIT-compiled sampler instead of rebuilding the full model on task switches.
+- Serving Docker now defaults to the routed launch script:
+  - `scripts/docker/serve_policy.Dockerfile` starts `scripts/server_routed.sh` unless `SERVER_SCRIPT` overrides it
+- Added a plain checkpoint-serving launch path for single-model test submissions:
+  - `scripts/server_checkpoint.sh`
+  - intended for configs like `acot_challenge_generalist_lora_clean_desktop`
 
 ## Dataset Understanding
 
@@ -56,7 +65,7 @@ Last updated: 2026-03-08
 - Validate a small debug training run on the actual target machine with `grad_accum_steps > 1`.
 - Extract adapters from a real generalist/specialist checkpoint set and verify routed loading against those files.
 - Validate the `AdapterRouted` CLI path with a real checkpoint + adapter directory.
-- Create a dedicated submission Docker path for the final chosen model.
+- Measure task-switch latency once real adapter files are available.
 
 ## Verification Notes
 

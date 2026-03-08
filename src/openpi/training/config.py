@@ -2214,7 +2214,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
             os.getenv(
                 "ACOT_CHALLENGE_INIT_WEIGHTS",
-                "gs://openpi-assets-preview/checkpoints/pi05/params",
+                "gs://openpi-assets-preview/checkpoints/pi05_base/params",
             )
         ),
         num_train_steps=50_000,
@@ -2251,11 +2251,11 @@ _CONFIGS = [
             decay_lr=5e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=0.999,
+        ema_decay=None,
         weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
             os.getenv(
                 "ACOT_CHALLENGE_INIT_WEIGHTS",
-                "gs://openpi-assets-preview/checkpoints/pi05_droid/params",
+                "gs://openpi-assets-preview/checkpoints/pi05_base/params",
             )
         ),
         num_train_steps=50_000,
@@ -2265,6 +2265,43 @@ _CONFIGS = [
         grad_accum_steps=4 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         freeze_filter=_reasoning2action_lora_freeze_filter(),
     ),
+    # A dummy smoke run with only 1 task (2 parts)
+    TrainConfig(
+        name="acot_challenge_generalist_lora_clean_desktop",
+        model=_reasoning2action_lora_model(),
+        data=_reasoning2action_data_config(
+            _reasoning2action_repo_ids(
+                "clean_the_desktop_part_1",
+                "clean_the_desktop_part_2",
+            ),
+            asset_id=os.getenv(
+                "ACOT_CHALLENGE_GENERALIST_CLEAN_DESKTOP_ASSET_ID",
+                "reasoning2action_sim_generalist_clean_desktop",
+            ),
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=50_000,
+            decay_lr=5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
+            os.getenv(
+                "ACOT_CHALLENGE_INIT_WEIGHTS",
+                "gs://openpi-assets-preview/checkpoints/pi05_base/params",
+            )
+        ),
+        num_train_steps=50_000,
+        save_interval=5000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 200,
+        num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        batch_size=18 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
+        grad_accum_steps=4 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        freeze_filter=_reasoning2action_lora_freeze_filter(),
+    ),
+
+
     *_make_reasoning2action_specialist_configs(),
 ]
 

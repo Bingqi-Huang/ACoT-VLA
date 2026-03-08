@@ -17,6 +17,13 @@ import openpi.training.data_loader as _data_loader
 import openpi.training.utils as training_utils
 
 
+def _asset_checkpoint_dir(assets_dir: epath.Path | str, asset_id: str | list[str] | None) -> epath.Path:
+    assets_dir = epath.Path(assets_dir)
+    if asset_id is None or isinstance(asset_id, list) or "/" in asset_id:
+        return assets_dir
+    return assets_dir / asset_id
+
+
 def initialize_checkpoint_dir(
     checkpoint_dir: epath.Path | str, *, keep_period: int | None, overwrite: bool, resume: bool
 ) -> tuple[ocp.CheckpointManager, bool]:
@@ -74,12 +81,12 @@ def save_state(
         data_config = data_loader.data_config()
         norm_stats = data_config.norm_stats
         if norm_stats is not None and data_config.asset_id is not None:
+            # Keep a root-level copy for backward compatibility, and save under asset_id
+            # so policy loading can find stats in trained checkpoints.
             _normalize.save(directory, norm_stats)
-            # if isinstance(data_config.asset_id, list):
-            #     _normalize.save(directory, norm_stats)
-            # else:
-            #     # original, which cannot be used here since asset_ids now is an absolute path 
-            #     _normalize.save(directory / data_config.asset_id, norm_stats)
+            target_dir = _asset_checkpoint_dir(directory, data_config.asset_id)
+            if target_dir != directory:
+                _normalize.save(target_dir, norm_stats)
 
     # Split params that can be used for inference into a separate item.
     with at.disable_typechecking():
@@ -113,14 +120,25 @@ def restore_state(
     return _merge_params(restored["train_state"], restored["params"])
 
 
-def load_norm_stats(assets_dir: epath.Path | str, asset_id: str) -> dict[str, _normalize.NormStats] | None:
-    if "/" in asset_id or isinstance(asset_id, list):
-        norm_stats_dir = epath.Path(assets_dir)
-    else:
-        norm_stats_dir = epath.Path(assets_dir) / asset_id
-    norm_stats = _normalize.load(norm_stats_dir)
-    logging.info(f"Loaded norm stats from {norm_stats_dir}")
-    return norm_stats
+def load_norm_stats(
+    assets_dir: epath.Path | str, asset_id: str | list[str]
+) -> dict[str, _normalize.NormStats] | None:
+    assets_dir = epath.Path(assets_dir)
+    candidate_dirs = [_asset_checkpoint_dir(assets_dir, asset_id)]
+    if candidate_dirs[0] != assets_dir:
+        candidate_dirs.append(assets_dir)
+
+    last_error = None
+    for norm_stats_dir in candidate_dirs:
+        try:
+            norm_stats = _normalize.load(norm_stats_dir)
+            logging.info(f"Loaded norm stats from {norm_stats_dir}")
+            return norm_stats
+        except FileNotFoundError as exc:
+            last_error = exc
+
+    assert last_error is not None
+    raise last_error
 
 
 class Callback(Protocol):

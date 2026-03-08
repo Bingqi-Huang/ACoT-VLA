@@ -2290,13 +2290,13 @@ _CONFIGS = [
         weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
             os.getenv(
                 "ACOT_CHALLENGE_INIT_WEIGHTS",
-                "gs://openpi-assets-preview/checkpoints/pi05_base/params",
+                "gs://openpi-assets/checkpoints/pi05_base/params",
             )
         ),
         num_train_steps=50_000,
         save_interval=5000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 200,
         num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
-        batch_size=18 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
+        batch_size=18 if not os.getenv("DEBUG_MODE", default=False) == "true" else 3,
         grad_accum_steps=4 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         freeze_filter=_reasoning2action_lora_freeze_filter(),
     ),

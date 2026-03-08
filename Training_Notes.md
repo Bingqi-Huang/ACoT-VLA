@@ -62,7 +62,7 @@ Use debug mode first:
 
 ```bash
 DEBUG_MODE=true uv run python scripts/train.py \
-    --config-name acot_challenge_generalist_lora_clean_desktop \
+    acot_challenge_generalist_lora_clean_desktop \
     --exp_name clean_desktop_debug \
     --overwrite
 ```
@@ -86,7 +86,7 @@ Or directly:
 
 ```bash
 uv run python scripts/train.py \
-    --config-name acot_challenge_generalist_lora_clean_desktop \
+    acot_challenge_generalist_lora_clean_desktop \
     --exp_name clean_desktop_v1
 ```
 

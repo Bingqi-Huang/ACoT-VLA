@@ -1187,6 +1187,8 @@ class TrainConfig:
     num_workers: int = 2
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
+    # Number of micro-batches to accumulate before each optimizer update.
+    grad_accum_steps: int = 1
 
     # How often (in steps) to log training metrics.
     log_interval: int = 100

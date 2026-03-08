@@ -357,7 +357,11 @@ class ACOTConfig(_model.BaseModelConfig):
         base_freeze_filter = nnx.Any(*freeze_paths)
         keep_alive_paths = []
 
-        has_lora = "lora" in self.paligemma_variant or "lora" in self.action_expert_variant
+        has_lora = (
+            "lora" in self.paligemma_variant
+            or "lora" in self.coarse_action_expert_variant
+            or "lora" in self.action_expert_variant
+        )
         if has_lora:
             keep_alive_paths.append(lora_filter)
 

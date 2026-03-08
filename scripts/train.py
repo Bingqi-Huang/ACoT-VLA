@@ -81,6 +81,15 @@ def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shap
     )
 
 
+def _fold_in_train_rng(
+    config: _config.TrainConfig,
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    micro_step: at.Int[at.ArrayLike, ""] = 0,
+) -> at.KeyArrayLike:
+    return jax.random.fold_in(rng, state.step * config.grad_accum_steps + micro_step)
+
+
 @at.typecheck
 def init_train_state(
     config: _config.TrainConfig, init_rng: at.KeyArrayLike, mesh: jax.sharding.Mesh, *, resume: bool
@@ -190,6 +199,76 @@ def train_step(
     }
     return new_state, info
 
+
+@at.typecheck
+def compute_grads(
+    config: _config.TrainConfig,
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    batch: tuple[_model.Observation, _model.Actions],
+    micro_step: at.Int[at.ArrayLike, ""],
+) -> tuple[nnx.State, at.Array]:
+    model = nnx.merge(state.model_def, state.params)
+    model.train()
+
+    @at.typecheck
+    def loss_fn(
+        model: _model.BaseModel, train_rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions
+    ):
+        chunked_loss = model.compute_loss(train_rng, observation, actions, train=True)
+        return jnp.mean(chunked_loss)
+
+    train_rng = _fold_in_train_rng(config, rng, state, micro_step)
+    observation, actions = batch
+
+    diff_state = nnx.DiffState(0, config.trainable_filter)
+    loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions)
+
+    return grads, loss
+
+
+@at.typecheck
+def apply_grads(
+    config: _config.TrainConfig,
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    grads: nnx.State,
+) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
+    del rng
+
+    model = nnx.merge(state.model_def, state.params)
+    model.train()
+
+    params = state.params.filter(config.trainable_filter)
+    updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
+    new_trainable_params = optax.apply_updates(params, updates)
+
+    nnx.update(model, new_trainable_params)
+    new_params = nnx.state(model)
+
+    new_state = dataclasses.replace(state, step=state.step + 1, params=new_params, opt_state=new_opt_state)
+    if state.ema_decay is not None:
+        new_state = dataclasses.replace(
+            new_state,
+            ema_params=jax.tree.map(
+                lambda old, new: state.ema_decay * old + (1 - state.ema_decay) * new, state.ema_params, new_params
+            ),
+        )
+
+    kernel_params = nnx.state(
+        model,
+        nnx.All(
+            nnx.Param,
+            nnx.Not(nnx_utils.PathRegex(".*/(bias|scale|pos_embedding|input_embedding)")),
+            lambda _, x: x.value.ndim > 1,
+        ),
+    )
+    info = {
+        "grad_norm": optax.global_norm(grads),
+        "param_norm": optax.global_norm(kernel_params),
+    }
+    return new_state, info
+
 @at.typecheck
 def acot_train_step(
     config: _config.TrainConfig,
@@ -247,6 +326,37 @@ def acot_train_step(
     }
     return new_state, info
 
+
+@at.typecheck
+def acot_compute_grads(
+    config: _config.TrainConfig,
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    batch: tuple[_model.Observation, _model.Actions, _model.CoarseActions],
+    micro_step: at.Int[at.ArrayLike, ""],
+) -> tuple[nnx.State, at.Array]:
+    model = nnx.merge(state.model_def, state.params)
+    model.train()
+
+    @at.typecheck
+    def loss_fn(
+        model: _model.BaseModel,
+        train_rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        actions: _model.Actions,
+        coarse_actions: _model.CoarseActions,
+    ):
+        return model.compute_loss(train_rng, observation, actions, coarse_actions, train=True)
+
+    train_rng = _fold_in_train_rng(config, rng, state, micro_step)
+    observation, actions, coarse_actions = batch
+
+    diff_state = nnx.DiffState(0, config.trainable_filter)
+    loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions, coarse_actions)
+
+    return grads, loss
+
+
 def main(config: _config.TrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
@@ -298,20 +408,25 @@ def main(config: _config.TrainConfig):
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
 
+    trainable_params_sharding = sharding.fsdp_sharding(train_state.params.filter(config.trainable_filter), mesh)
     if config.model.model_type == _model.ModelType.ACOT_VLA_PI05 or config.model.model_type == _model.ModelType.ACOT_VLA_PI0:
-        ptrain_step = jax.jit(
-            functools.partial(acot_train_step, config),
-            in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-            out_shardings=(train_state_sharding, replicated_sharding),
-            donate_argnums=(1,),
+        pcompute_grads = jax.jit(
+            functools.partial(acot_compute_grads, config),
+            in_shardings=(replicated_sharding, train_state_sharding, data_sharding, replicated_sharding),
+            out_shardings=(trainable_params_sharding, replicated_sharding),
         )
     else:
-        ptrain_step = jax.jit(
-            functools.partial(train_step, config),
-            in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-            out_shardings=(train_state_sharding, replicated_sharding),
-            donate_argnums=(1,),
+        pcompute_grads = jax.jit(
+            functools.partial(compute_grads, config),
+            in_shardings=(replicated_sharding, train_state_sharding, data_sharding, replicated_sharding),
+            out_shardings=(trainable_params_sharding, replicated_sharding),
         )
+    papply_grads = jax.jit(
+        functools.partial(apply_grads, config),
+        in_shardings=(replicated_sharding, train_state_sharding, trainable_params_sharding),
+        out_shardings=(train_state_sharding, replicated_sharding),
+        donate_argnums=(1, 2),
+    )
 
     start_step = int(train_state.step)
     print("\n--- Trainable Parameters ---")
@@ -327,8 +442,20 @@ def main(config: _config.TrainConfig):
 
     infos = []
     for step in pbar:
+        accumulated_grads = None
+        total_loss = None
         with sharding.set_mesh(mesh):
-            train_state, info = ptrain_step(train_rng, train_state, batch)
+            for micro_step in range(config.grad_accum_steps):
+                grads, loss = pcompute_grads(train_rng, train_state, batch, micro_step)
+                total_loss = loss if total_loss is None else total_loss + loss
+                accumulated_grads = grads if accumulated_grads is None else jax.tree.map(jnp.add, accumulated_grads, grads)
+                batch = next(data_iter)
+
+            assert accumulated_grads is not None
+            assert total_loss is not None
+            avg_grads = jax.tree.map(lambda g: g / config.grad_accum_steps, accumulated_grads)
+            train_state, info = papply_grads(train_rng, train_state, avg_grads)
+            info["loss"] = total_loss / config.grad_accum_steps
         infos.append(info)
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
@@ -337,7 +464,6 @@ def main(config: _config.TrainConfig):
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
             infos = []
-        batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
             _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)

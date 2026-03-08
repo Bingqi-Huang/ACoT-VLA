@@ -77,13 +77,10 @@ If architecture changes are made, the serving layer must still:
 - The baseline serving entrypoint is `scripts/serve_policy.py`.
 - The default Docker serving file is `scripts/docker/serve_policy.Dockerfile`.
 - Default server launch currently goes through `scripts/server.sh`.
-- The smoke submission Docker file is `scripts/docker/smoke_submission.Dockerfile`.
-- The smoke submission startup script is `scripts/server_smoke_submission.sh`.
 - Inference in this repo loads a trained checkpoint directory containing:
   - `params`
   - `assets`
 - If training config changes, submission startup must point to the matching config and checkpoint.
-- The current Reasoning2Action smoke submission should be declared as `abs_joint`.
 
 ## Official External References
 

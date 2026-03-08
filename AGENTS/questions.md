@@ -6,5 +6,5 @@ Track unresolved questions here so future agents do not repeatedly rediscover th
 
 - What global batch size is realistically sustainable on the user's target hardware for the challenge config?
 - Should the final competition model remain close to baseline ACoT-VLA or use a more aggressive LoRA setup?
-- Does the official baseline parent image remain directly pullable with the current test-server registry token flow?
-- What exact `task_name` values and prompt formats does the real evaluator send at submission time?
+- Is checkpoint export for submission best handled by reusing the repo serving Dockerfile or by introducing a dedicated submission Dockerfile?
+- What local smoke test is sufficient to validate the websocket server before image push?

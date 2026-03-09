@@ -2330,6 +2330,45 @@ _CONFIGS = [
         grad_accum_steps=1 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         freeze_filter=_reasoning2action_lora_freeze_filter(),
     ),
+    TrainConfig(
+        name="acot_challenge_generalist_lora_3_tasks",
+        model=_reasoning2action_lora_model(),
+        data=_reasoning2action_data_config(
+            _reasoning2action_repo_ids(
+                "open_door",
+                "hold_pot",
+                "clean_the_desktop_part_1",
+                "clean_the_desktop_part_2",
+            ),
+            asset_id=os.getenv(
+                "ACOT_CHALLENGE_GENERALIST_CLEAN_DESKTOP_ASSET_ID",
+                "reasoning2action_sim_generalist_3_tasks",
+            ),
+            split_name="acot_challenge_generalist_lora_3_tasks",
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=3_000,
+            peak_lr=4e-5,
+            decay_steps=35_000,
+            decay_lr=4e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
+            os.getenv(
+                "ACOT_CHALLENGE_INIT_WEIGHTS",
+                "gs://openpi-assets/checkpoints/pi05_base/params",
+            )
+        ),
+        num_train_steps=35_000,
+        save_interval=2500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 200,
+        val_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
+        val_num_batches=8 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
+        num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        batch_size=60 if not os.getenv("DEBUG_MODE", default=False) == "true" else 3,
+        grad_accum_steps=1 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        freeze_filter=_reasoning2action_lora_freeze_filter(),
+    ),
 
 
     *_make_reasoning2action_specialist_configs(),

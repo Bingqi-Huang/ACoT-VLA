@@ -59,6 +59,12 @@ What changed:
 - Updated `scripts/compute_norm_stats.py` to support `--split`, defaulting the intended workflow to train-only stats.
 - Added `scripts/generate_episode_split.py` and `docs/reasoning2action_episode_split.md`.
 - Added focused tests in `src/openpi/training/episode_split_test.py`.
+- Added offline checkpoint evaluation:
+  - `scripts/eval_offline.py`
+  - `src/openpi/training/offline_eval.py`
+  - `src/openpi/training/offline_eval_test.py`
+  - `docs/reasoning2action_offline_eval.md`
+- Added deterministic teacher-forced offline hooks to `src/openpi/models/pi0.py` and `src/openpi/models/acot_vla.py` so validation can report per-example loss and action-reconstruction metrics without rollout.
 
 What was verified:
 
@@ -67,6 +73,7 @@ What was verified:
 - `python3 -m py_compile` passes on the modified files.
 - `git diff --check` passes.
 - `python3 -m py_compile` passes on the new episode-split and validation files.
+- `python3 -m py_compile` passes on the offline-eval script/helper/model-hook changes.
 
 What is still broken or unknown:
 
@@ -79,10 +86,12 @@ What is still broken or unknown:
 - `pytest` is not installed in the checked environment, so the new tests were added but not run through pytest here.
 - Direct runtime smoke checks that import JAX are blocked because the environment currently has `ml_dtypes==0.4.1`, while JAX now requires `>=0.5`.
 - The new val-loss path still needs a real clean-desktop training run to confirm the split manifest, train-only stats, and val-only loader behave correctly on actual data.
+- The new offline evaluator still needs one real experiment directory run to confirm batch loading, per-task task-name recovery, and JSON/CSV outputs on actual Reasoning2Action checkpoints.
 
 Immediate next step:
 
 - Run `scripts/generate_episode_split.py` for `acot_challenge_generalist_lora_clean_desktop`, recompute norm stats with `--split train`, then launch a short debug training run and confirm validation loss logs on the val split.
+- After the debug run produces checkpoints, execute `scripts/eval_offline.py` on the experiment directory and inspect `eval/summary.csv` for checkpoint ranking.
 
 Git note:
 

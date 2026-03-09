@@ -695,6 +695,97 @@ class ACOT_VLA(_model.BaseModel):
 
         return tokens, input_mask, ar_mask, adarms_cond
 
+    def _teacher_forced_velocity_terms(
+        self,
+        observation: _model.Observation,
+        actions: _model.Actions,
+        coarse_actions: _model.CoarseActions,
+        *,
+        train: bool,
+        preprocess_rng: at.KeyArrayLike | None,
+        time: at.Float[at.Array, " b"],
+        coarse_action_noise: _model.CoarseActions | None = None,
+        expert_action_noise: _model.Actions | None = None,
+    ) -> tuple[
+        at.Float[at.Array, "b ah ad"],
+        at.Float[at.Array, "b ah ad"],
+        at.Float[at.Array, "b ch ad"] | None,
+        at.Float[at.Array, "b ch ad"] | None,
+    ]:
+        observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
+        time_expanded = time[..., None, None]
+
+        if coarse_action_noise is None:
+            coarse_action_noise = jnp.zeros_like(coarse_actions)
+        if expert_action_noise is None:
+            expert_action_noise = jnp.zeros_like(actions)
+
+        x_ref_t = time_expanded * coarse_action_noise + (1.0 - time_expanded) * coarse_actions
+        u_ref_t = coarse_action_noise - coarse_actions
+
+        x_expert_t = time_expanded * expert_action_noise + (1.0 - time_expanded) * actions
+        u_expert_t = expert_action_noise - actions
+
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+        positions_prefix = jnp.cumsum(prefix_mask, axis=1) - 1
+        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None, None], mask=prefix_attn_mask, positions=positions_prefix)
+
+        if self.adopt_explicit_action_reasoner:
+            suffix_ref_action_tokens, suffix_ref_action_mask, suffix_ref_action_ar_mask, adarms_ref_action_cond = (
+                self.embed_suffix(observation, x_ref_t, time, suf_type="reasoner")
+            )
+
+            ref_input_mask = jnp.concatenate([prefix_mask, suffix_ref_action_mask], axis=1)
+            ref_ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ref_action_ar_mask], axis=0)
+            ref_attn_mask = make_attn_mask(ref_input_mask, ref_ar_mask)
+            ref_positions = jnp.cumsum(ref_input_mask, axis=1) - 1
+
+            (_, suffix_ref_action_out, _), _ = self.PaliGemma.llm(
+                [prefix_tokens, suffix_ref_action_tokens, None],
+                mask=ref_attn_mask,
+                positions=ref_positions,
+                adarms_cond=[None, adarms_ref_action_cond, None],
+            )
+            explicit_action_reason = coarse_actions
+            v_ref_t = self.coarse_action_out_proj(suffix_ref_action_out[:, -self.coarse_action_horizon :])
+        else:
+            explicit_action_reason = None
+            v_ref_t = None
+            u_ref_t = None
+
+        if self.adopt_implicit_action_reasoner:
+            K_all, V_all = kv_cache
+            K_rearranged = einops.rearrange(K_all, "L B T 1 D -> B L T D")
+            V_rearranged = einops.rearrange(V_all, "L B T 1 D -> B L T D")
+            implicit_action_reason = self.implicit_action_reasoner(K_rearranged, V_rearranged)
+        else:
+            implicit_action_reason = None
+
+        suffix_expert_tokens, suffix_expert_mask, suffix_expert_ar_mask, adarms_expert_cond = self.embed_suffix(
+            observation,
+            x_expert_t,
+            time,
+            explicit_action_reason=explicit_action_reason,
+            implicit_action_reason=implicit_action_reason,
+            suf_type="expert",
+        )
+
+        expert_input_mask = jnp.concatenate([prefix_mask, suffix_expert_mask], axis=1)
+        expert_ar_mask = jnp.concatenate([prefix_ar_mask, suffix_expert_ar_mask], axis=0)
+        expert_attn_mask = make_attn_mask(expert_input_mask, expert_ar_mask)
+        expert_positions = jnp.cumsum(expert_input_mask, axis=1) - 1
+
+        (_, _, suffix_expert_out), _ = self.PaliGemma.llm(
+            [prefix_tokens, None, suffix_expert_tokens],
+            mask=expert_attn_mask,
+            positions=expert_positions,
+            adarms_cond=[None, None, adarms_expert_cond],
+        )
+
+        v_expert_t = self.action_out_proj(suffix_expert_out[:, -self.action_horizon :])
+        return v_expert_t, u_expert_t, v_ref_t, u_ref_t
+
     @override
     def compute_loss(
         self, rng: at.KeyArrayLike,
@@ -703,97 +794,83 @@ class ACOT_VLA(_model.BaseModel):
         coarse_actions: _model.CoarseActions, *, train: bool = False
     ) -> at.Float[at.Array, "*b ah"]:
 
-        # preprocess_rng, _, time_rng, coarse_action_noise_rng, _, expert_action_noise_rng = jax.random.split(rng, 6)
         preprocess_rng, time_rng, coarse_action_noise_rng, expert_action_noise_rng = jax.random.split(rng, 4)
-        observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
-
         batch_shape = actions.shape[:-2]
-
         coarse_action_noise = jax.random.normal(coarse_action_noise_rng, coarse_actions.shape)
         expert_action_noise = jax.random.normal(expert_action_noise_rng, actions.shape)
-
         time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
-        time_expanded = time[..., None, None]
-
-        # use coarse actions as explicit action reasoning
-        x_ref_t = time_expanded * coarse_action_noise + (1.0 - time_expanded) * coarse_actions
-        u_ref_t = coarse_action_noise - coarse_actions
-
-        x_expert_t = time_expanded * expert_action_noise + (1.0 - time_expanded) * actions
-        u_expert_t = expert_action_noise - actions
-
-        # forward to get kv cache
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
-
-        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
-        positions_prefix = jnp.cumsum(prefix_mask, axis=1) - 1
-        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None, None], mask=prefix_attn_mask, positions=positions_prefix)
-
-        if self.adopt_explicit_action_reasoner:
-            # suffix forward to get explicit action reference
-            suffix_ref_action_tokens, suffix_ref_action_mask, suffix_ref_action_ar_mask, adarms_ref_action_cond = self.embed_suffix(observation, x_ref_t, time, suf_type = "reasoner")
-
-            input_mask = jnp.concatenate([prefix_mask, suffix_ref_action_mask], axis=1)
-            ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ref_action_ar_mask], axis=0)
-            attn_mask = make_attn_mask(input_mask, ar_mask)
-            positions = jnp.cumsum(input_mask, axis=1) - 1
-
-            (prefix_ref_action_out, suffix_ref_action_out, _), _ = self.PaliGemma.llm(
-                [prefix_tokens, suffix_ref_action_tokens, None],
-                mask=attn_mask,
-                positions=positions,
-                adarms_cond=[None, adarms_ref_action_cond, None],
-            )
-            # teacher forcing
-            explicit_action_reason = coarse_actions
-
-        else:
-            explicit_action_reason = None
-
-        if self.adopt_implicit_action_reasoner:
-            K_all, V_all = kv_cache
-            K_rearranged = einops.rearrange(K_all, 'L B T 1 D -> B L T D')
-            V_rearranged = einops.rearrange(V_all, 'L B T 1 D -> B L T D')
-            # implicit action reasoner
-            implicit_action_reason = self.implicit_action_reasoner(K_rearranged, V_rearranged)
-        else:
-            implicit_action_reason = None
-        
-        # suffix forward to get action prediction
-        suffix_expert_tokens, suffix_expert_mask, suffix_expert_ar_mask, adarms_expert_cond = self.embed_suffix(
-            observation, x_expert_t, time,
-            explicit_action_reason=explicit_action_reason,
-            implicit_action_reason=implicit_action_reason,
-            suf_type = "expert"
+        v_expert_t, u_expert_t, v_ref_t, u_ref_t = self._teacher_forced_velocity_terms(
+            observation,
+            actions,
+            coarse_actions,
+            train=train,
+            preprocess_rng=preprocess_rng,
+            time=time,
+            coarse_action_noise=coarse_action_noise,
+            expert_action_noise=expert_action_noise,
         )
 
-        input_mask = jnp.concatenate([prefix_mask, suffix_expert_mask], axis=1)
-        ar_mask = jnp.concatenate([prefix_ar_mask, suffix_expert_ar_mask], axis=0)
-        attn_mask = make_attn_mask(input_mask, ar_mask)
-        positions = jnp.cumsum(input_mask, axis=1) - 1
-
-        (prefix_expert_out, _, suffix_expert_out), _ = self.PaliGemma.llm(
-            [prefix_tokens, None, suffix_expert_tokens],
-            mask=attn_mask,
-            positions=positions,
-            adarms_cond=[None, None, adarms_expert_cond],
-        )
-
-
+        action_diff_expert = u_expert_t - v_expert_t
         if self.adopt_explicit_action_reasoner:
-            # trainer explicit action reasoner using flow matching
-            v_ref_t = self.coarse_action_out_proj(suffix_ref_action_out[:, -self.coarse_action_horizon :])
-            v_expert_t = self.action_out_proj(suffix_expert_out[:, -self.action_horizon :])
-
+            assert v_ref_t is not None
+            assert u_ref_t is not None
             action_diff_ref = u_ref_t - v_ref_t
-            action_diff_expert = u_expert_t - v_expert_t
-            # Since we set the balance factor as 0.5, the following loss is equal
             return jnp.mean(jnp.square(action_diff_ref)) + jnp.mean(jnp.square(action_diff_expert))
 
-        else:
-            v_expert_t = self.action_out_proj(suffix_expert_out[:, -self.action_horizon :])
-            action_diff_expert = u_expert_t - v_expert_t
-            return jnp.mean(jnp.square(action_diff_expert))
+        return jnp.mean(jnp.square(action_diff_expert))
+
+    def compute_loss_per_example(
+        self,
+        rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        actions: _model.Actions,
+        coarse_actions: _model.CoarseActions,
+        *,
+        train: bool = False,
+    ) -> at.Float[at.Array, " b"]:
+        preprocess_rng, time_rng, coarse_action_noise_rng, expert_action_noise_rng = jax.random.split(rng, 4)
+        batch_shape = actions.shape[:-2]
+        coarse_action_noise = jax.random.normal(coarse_action_noise_rng, coarse_actions.shape)
+        expert_action_noise = jax.random.normal(expert_action_noise_rng, actions.shape)
+        time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
+
+        v_expert_t, u_expert_t, v_ref_t, u_ref_t = self._teacher_forced_velocity_terms(
+            observation,
+            actions,
+            coarse_actions,
+            train=train,
+            preprocess_rng=preprocess_rng,
+            time=time,
+            coarse_action_noise=coarse_action_noise,
+            expert_action_noise=expert_action_noise,
+        )
+
+        loss_per_example = jnp.mean(jnp.square(u_expert_t - v_expert_t), axis=(-1, -2))
+        if self.adopt_explicit_action_reasoner:
+            assert v_ref_t is not None
+            assert u_ref_t is not None
+            loss_per_example = loss_per_example + jnp.mean(jnp.square(u_ref_t - v_ref_t), axis=(-1, -2))
+        return loss_per_example
+
+    def teacher_force_actions(
+        self,
+        observation: _model.Observation,
+        actions: _model.Actions,
+        coarse_actions: _model.CoarseActions,
+        *,
+        time: float | at.Float[at.Array, ""] = 0.5,
+    ) -> _model.Actions:
+        batch_size = actions.shape[0]
+        timestep = jnp.broadcast_to(jnp.asarray(time, dtype=actions.dtype), (batch_size,))
+        v_expert_t, _, _, _ = self._teacher_forced_velocity_terms(
+            observation,
+            actions,
+            coarse_actions,
+            train=False,
+            preprocess_rng=None,
+            time=timestep,
+        )
+        return -v_expert_t
 
     @override
     def sample_actions(

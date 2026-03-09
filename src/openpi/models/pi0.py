@@ -288,33 +288,60 @@ class Pi0(_model.BaseModel):
         ar_mask = jnp.array(ar_mask)
         return tokens, input_mask, ar_mask, adarms_cond
 
+    def _predict_velocity(
+        self,
+        observation: _model.Observation,
+        noisy_actions: _model.Actions,
+        timestep: at.Float[at.Array, " b"],
+        *,
+        train: bool,
+        preprocess_rng: at.KeyArrayLike | None,
+    ) -> at.Float[at.Array, "b ah ad"]:
+        observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
+
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, noisy_actions, timestep)
+        input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
+        ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=0)
+        attn_mask = make_attn_mask(input_mask, ar_mask)
+        positions = jnp.cumsum(input_mask, axis=1) - 1
+        (_, suffix_out), _ = self.PaliGemma.llm(
+            [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions, adarms_cond=[None, adarms_cond]
+        )
+        return self.action_out_proj(suffix_out[:, -self.action_horizon :])
+
     @override
     def compute_loss(
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
     ) -> at.Float[at.Array, "*b ah"]:
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
-        observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
-
         batch_shape = actions.shape[:-2]
         noise = jax.random.normal(noise_rng, actions.shape)
         time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
         time_expanded = time[..., None, None]
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         u_t = noise - actions
-
-        # one big forward pass of prefix + suffix at once
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
-        suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
-        input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
-        ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=0)
-        attn_mask = make_attn_mask(input_mask, ar_mask)
-        positions = jnp.cumsum(input_mask, axis=1) - 1
-        (prefix_out, suffix_out), _ = self.PaliGemma.llm(
-            [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions, adarms_cond=[None, adarms_cond]
-        )
-        v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
+        v_t = self._predict_velocity(observation, x_t, time, train=train, preprocess_rng=preprocess_rng)
 
         return jnp.mean(jnp.square(v_t - u_t), axis=-1)
+
+    def compute_loss_per_example(
+        self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
+    ) -> at.Float[at.Array, " b"]:
+        return jnp.mean(self.compute_loss(rng, observation, actions, train=train), axis=-1)
+
+    def teacher_force_actions(
+        self,
+        observation: _model.Observation,
+        actions: _model.Actions,
+        *,
+        time: float | at.Float[at.Array, ""] = 0.5,
+    ) -> _model.Actions:
+        batch_size = actions.shape[0]
+        timestep = jnp.broadcast_to(jnp.asarray(time, dtype=actions.dtype), (batch_size,))
+        x_t = (1 - timestep[..., None, None]) * actions
+        v_t = self._predict_velocity(observation, x_t, timestep, train=False, preprocess_rng=None)
+        return -v_t
 
     @override
     def sample_actions(

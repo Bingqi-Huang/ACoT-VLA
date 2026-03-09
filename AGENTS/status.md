@@ -53,6 +53,14 @@ Last updated: 2026-03-09
 - Added split tooling and docs:
   - `scripts/generate_episode_split.py`
   - `docs/reasoning2action_episode_split.md`
+- Added standalone offline evaluation for finetuning checkpoints:
+  - `scripts/eval_offline.py`
+  - `src/openpi/training/offline_eval.py`
+  - `docs/reasoning2action_offline_eval.md`
+- Added deterministic teacher-forced offline model hooks for pi0/pi0.5 and ACoT:
+  - `compute_loss_per_example(...)`
+  - `teacher_force_actions(...)`
+  - used for offline validation metrics without rollout
 
 ## Dataset Understanding
 
@@ -76,12 +84,14 @@ Last updated: 2026-03-09
 - The runtime contract is stricter than the training process.
 - Architecture changes are allowed only if the final serving interface remains compliant.
 - For meaningful finetuning validation, train/val separation now happens strictly at the episode level for LeRobot datasets when `episode_split` is configured.
+- Offline checkpoint selection can now be done on the val episode split without simulation rollout, using per-checkpoint JSON metrics and a summary CSV.
 
 ## Known Open Work
 
 - Finish or verify full extraction of all dataset parts.
 - Validate a small debug training run on the actual target machine with `grad_accum_steps > 1`.
 - Validate the new episode-split training path end-to-end on the clean-desktop smoke config and confirm validation loss logs as expected.
+- Run the new offline evaluator on a real clean-desktop experiment directory and confirm the JSON/CSV outputs match expectations.
 - Extract adapters from a real generalist/specialist checkpoint set and verify routed loading against those files.
 - Validate the `AdapterRouted` CLI path with a real checkpoint + adapter directory.
 - Measure task-switch latency once real adapter files are available.
@@ -91,6 +101,7 @@ Last updated: 2026-03-09
 - `python3 -m py_compile` passes for the modified model/config/training files.
 - `python3 -m py_compile` passes for the modified serving and adapter files.
 - `python3 -m py_compile` passes for the new episode-split and validation files.
+- `python3 -m py_compile` passes for the new offline evaluation files and the added model hooks.
 - `git diff --check` passes.
 - `uv run pytest ...` could not be completed in this environment because dependency resolution attempted network access and failed on DNS/package download.
 - Direct Python smoke execution of the new split helpers is currently blocked in this environment because the installed `ml_dtypes` version is too old for JAX import (`0.4.1`, JAX requires `>=0.5`).

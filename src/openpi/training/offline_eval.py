@@ -57,8 +57,19 @@ def load_model_and_data_config(
     if data_config.asset_id is None:
         raise ValueError("Asset id is required to load normalization stats for offline evaluation.")
     norm_stats = _checkpoints.load_norm_stats(checkpoint_dir / "assets", data_config.asset_id)
-    data_config = dataclasses.replace(data_config, norm_stats=norm_stats)
+    data_config = attach_norm_stats(data_config, norm_stats)
     return model, data_config
+
+
+def attach_norm_stats(
+    data_config: _config.DataConfig,
+    norm_stats: dict[str, Any] | None,
+) -> _config.DataConfig:
+    # Some ACOT data configs attach extra runtime attributes (for example
+    # `joint_action_shifts`) after dataclass construction. Mutating the frozen
+    # instance in place keeps those attributes intact for offline eval.
+    object.__setattr__(data_config, "norm_stats", norm_stats)
+    return data_config
 
 
 def create_validation_loader(

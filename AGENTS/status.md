@@ -86,6 +86,7 @@ Last updated: 2026-03-09
 - For meaningful finetuning validation, train/val separation now happens strictly at the episode level for LeRobot datasets when `episode_split` is configured.
 - Offline checkpoint selection can now be done on the val episode split without simulation rollout, using per-checkpoint JSON metrics and a summary CSV.
 - Finetuning runs now emit richer training diagnostics during `scripts/train.py`, including train loss, per-task train loss when task metadata is present, learning rate, grad norm, param norm, throughput, wall-clock time, checkpoint events, and batch-level action MAE metrics to both W&B and `train_metrics.jsonl` inside the experiment checkpoint directory; the W&B metric families are now explicitly defined so these series show up with stable step axes.
+- Offline eval for ACOT checkpoints now preserves dynamic data-config attributes such as `joint_action_shifts` when injecting checkpoint norm stats, fixing the `AttributeError: 'DataConfig' object has no attribute 'joint_action_shifts'` crash seen on clean-desktop checkpoint evaluation.
 
 ## Known Open Work
 
@@ -97,6 +98,7 @@ Last updated: 2026-03-09
 - Extract adapters from a real generalist/specialist checkpoint set and verify routed loading against those files.
 - Validate the `AdapterRouted` CLI path with a real checkpoint + adapter directory.
 - Measure task-switch latency once real adapter files are available.
+- Re-run `scripts/eval_offline.py` on the previously failing clean-desktop checkpoint and confirm it now gets past dataset construction into actual metric computation.
 
 ## Verification Notes
 

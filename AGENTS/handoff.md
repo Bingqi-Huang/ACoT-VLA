@@ -72,6 +72,7 @@ What changed:
   - writes the same flat metrics stream to `<checkpoint_dir>/train_metrics.jsonl`
   - explicitly registers the `train/*`, `val/*`, and `checkpoint/*` metric families with W&B so the new series appear with consistent step axes
 - Extended `src/openpi/training/data_loader.py` so the training loop can recover raw batch metadata (`task`, `episode_index`, `frame_index`) for logging without changing the model input path.
+- Fixed offline eval for ACOT data configs in `src/openpi/training/offline_eval.py` by preserving dynamic attrs like `joint_action_shifts` when swapping in checkpoint norm stats; this addresses the clean-desktop eval crash where `create_torch_dataset()` received a plain `DataConfig`.
 
 What was verified:
 
@@ -95,6 +96,7 @@ What is still broken or unknown:
 - The new val-loss path still needs a real clean-desktop training run to confirm the split manifest, train-only stats, and val-only loader behave correctly on actual data.
 - The new offline evaluator still needs one real experiment directory run to confirm batch loading, per-task task-name recovery, and JSON/CSV outputs on actual Reasoning2Action checkpoints.
 - The new train logging still needs one real clean-desktop run to confirm task metadata survives as expected and that the additional batch-metric JIT does not add unacceptable overhead.
+- The fixed offline eval path still needs one real rerun on the previously failing clean-desktop checkpoint to confirm metric generation completes end-to-end.
 
 Immediate next step:
 

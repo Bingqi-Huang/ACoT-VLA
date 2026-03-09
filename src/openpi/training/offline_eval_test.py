@@ -1,5 +1,6 @@
 import numpy as np
 
+from openpi.training import config as _config
 from openpi.training import offline_eval as _offline_eval
 
 
@@ -31,3 +32,14 @@ def test_offline_eval_accumulator_reports_expected_metrics():
     assert len(metrics["horizon_step_mae"]) == 3
     assert "overall_joint_mae" in metrics
     assert metrics["gripper"]["is_binary_target"] is True
+
+
+def test_attach_norm_stats_preserves_dynamic_attrs():
+    data_config = _config.DataConfig()
+    object.__setattr__(data_config, "joint_action_shifts", (2, 1))
+
+    updated = _offline_eval.attach_norm_stats(data_config, {"actions": "dummy"})
+
+    assert updated is data_config
+    assert updated.norm_stats == {"actions": "dummy"}
+    assert updated.joint_action_shifts == (2, 1)

@@ -7,6 +7,7 @@ import torch
 from openpi.models import pi0
 from openpi.training import config as _config
 from openpi.training import data_loader as _data_loader
+import openpi.transforms as _transforms
 
 
 def test_torch_data_loader():
@@ -89,8 +90,8 @@ def test_with_real_dataset():
 class _FakeLeRobotDataset:
     class _Meta:
         def __init__(self):
-            self.video_keys = []
-            self.camera_keys = []
+            self.video_keys = ["observation.images.hand_right", "observation.images.hand_right_depth"]
+            self.camera_keys = ["observation.images.hand_right", "observation.images.hand_right_depth"]
             self.tasks = {0: "fake_task"}
 
     def __init__(self, episodes, episode_index=0):
@@ -104,9 +105,11 @@ class _FakeLeRobotDataset:
                 "episode_index": torch.tensor(episode_index),
                 "task_index": torch.tensor(0),
                 "timestamp": torch.tensor(0.0),
+                "observation.images.hand_right": torch.ones((4, 4, 3)),
             }
         ]
         self.calls = []
+        self.video_calls = []
 
     def _get_query_indices(self, idx, ep_idx):
         self.calls.append((idx, ep_idx))
@@ -117,11 +120,14 @@ class _FakeLeRobotDataset:
 
     def _get_query_timestamps(self, current_ts, query_indices=None):
         del current_ts, query_indices
-        return {}
+        return {
+            "observation.images.hand_right": [0.0],
+            "observation.images.hand_right_depth": [0.0],
+        }
 
     def _query_videos(self, query_timestamps, ep_idx):
-        del query_timestamps, ep_idx
-        return {}
+        self.video_calls.append((query_timestamps, ep_idx))
+        return {key: torch.ones((1, 4, 4, 3)) for key in query_timestamps}
 
     def __len__(self):
         return len(self.hf_dataset)
@@ -135,18 +141,26 @@ class _FakeMultiDataset:
 def test_episode_subset_compatible_lerobot_dataset_maps_global_to_local(monkeypatch):
     monkeypatch.setattr(_data_loader.lerobot_dataset, "LeRobotDataset", _FakeLeRobotDataset)
     dataset = _FakeLeRobotDataset([5, 9], episode_index=9)
-    wrapped = _data_loader.EpisodeSubsetCompatibleLeRobotDataset(dataset)
+    wrapped = _data_loader.EpisodeSubsetCompatibleLeRobotDataset(
+        dataset,
+        required_camera_keys={"observation.images.hand_right"},
+    )
 
     item = wrapped[0]
 
     assert dataset.calls == [(0, 1)]
+    assert dataset.video_calls == [({"observation.images.hand_right": [0.0]}, 9)]
     assert item["task"] == "fake_task"
     assert item["episode_index"].item() == 9
+    assert "observation.images.hand_right_depth" not in item
 
 
 def test_episode_subset_compatible_lerobot_dataset_is_pickle_safe(monkeypatch):
     monkeypatch.setattr(_data_loader.lerobot_dataset, "LeRobotDataset", _FakeLeRobotDataset)
-    wrapped = _data_loader.EpisodeSubsetCompatibleLeRobotDataset(_FakeLeRobotDataset([3, 7], episode_index=7))
+    wrapped = _data_loader.EpisodeSubsetCompatibleLeRobotDataset(
+        _FakeLeRobotDataset([3, 7], episode_index=7),
+        required_camera_keys={"observation.images.hand_right"},
+    )
 
     restored = pickle.loads(pickle.dumps(wrapped))
     restored[0]
@@ -190,4 +204,25 @@ def test_make_selected_episode_compatible_dataset_leaves_contiguous_subset_uncha
 
     wrapped = _data_loader._make_selected_episode_compatible_dataset(dataset)
 
-    assert wrapped is dataset
+    assert isinstance(wrapped, _data_loader.EpisodeSubsetCompatibleLeRobotDataset)
+
+
+def test_required_camera_keys_from_data_config_extracts_only_used_image_sources():
+    data_config = _config.DataConfig(
+        repack_transforms=_transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "images": {
+                            "rgb": "observation.images.hand_right",
+                        },
+                        "state": "observation.state",
+                    }
+                )
+            ]
+        )
+    )
+
+    required_camera_keys = _data_loader._required_camera_keys_from_data_config(data_config)
+
+    assert required_camera_keys == {"observation.images.hand_right"}

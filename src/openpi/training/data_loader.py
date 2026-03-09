@@ -170,14 +170,20 @@ class FakeDataset(Dataset):
 
 
 class EpisodeSubsetCompatibleLeRobotDataset(Dataset):
-    def __init__(self, dataset: lerobot_dataset.LeRobotDataset):
+    def __init__(
+        self,
+        dataset: lerobot_dataset.LeRobotDataset,
+        *,
+        required_camera_keys: set[str] | None = None,
+    ):
         self._base_dataset = dataset
         episodes = getattr(dataset, "episodes", None)
-        if episodes is None:
-            raise ValueError("EpisodeSubsetCompatibleLeRobotDataset requires a dataset with selected episodes.")
-        self._episode_id_to_local_idx = {
-            int(episode_id): local_idx for local_idx, episode_id in enumerate(episodes)
-        }
+        self._episode_id_to_local_idx = None
+        if episodes is not None:
+            self._episode_id_to_local_idx = {
+                int(episode_id): local_idx for local_idx, episode_id in enumerate(episodes)
+            }
+        self._required_camera_keys = required_camera_keys
 
     def __len__(self) -> int:
         return len(self._base_dataset)
@@ -189,31 +195,45 @@ class EpisodeSubsetCompatibleLeRobotDataset(Dataset):
 
         query_indices = None
         if self._base_dataset.delta_indices is not None:
-            local_ep_idx = self._episode_id_to_local_idx.get(int(ep_idx))
-            if local_ep_idx is None:
-                raise IndexError(
-                    f"Episode index {ep_idx} not found in selected episodes for dataset {self._base_dataset.repo_id}"
-                )
+            local_ep_idx = int(ep_idx)
+            if self._episode_id_to_local_idx is not None:
+                local_ep_idx = self._episode_id_to_local_idx.get(int(ep_idx))
+                if local_ep_idx is None:
+                    raise IndexError(
+                        f"Episode index {ep_idx} not found in selected episodes for dataset {self._base_dataset.repo_id}"
+                    )
             query_indices, padding = self._base_dataset._get_query_indices(index, local_ep_idx)
             query_result = self._base_dataset._query_hf_dataset(query_indices)
             item = {**item, **padding}
             for key, val in query_result.items():
                 item[key] = val
 
-        if len(self._base_dataset.meta.video_keys) > 0:
+        video_keys = self._selected_video_keys()
+        if video_keys:
             current_ts = item["timestamp"].item()
             query_timestamps = self._base_dataset._get_query_timestamps(current_ts, query_indices)
+            query_timestamps = {key: value for key, value in query_timestamps.items() if key in video_keys}
             video_frames = self._base_dataset._query_videos(query_timestamps, ep_idx)
             item = {**video_frames, **item}
 
         if self._base_dataset.image_transforms is not None:
-            image_keys = self._base_dataset.meta.camera_keys
+            image_keys = self._selected_camera_keys()
             for cam in image_keys:
-                item[cam] = self._base_dataset.image_transforms(item[cam])
+                if cam in item:
+                    item[cam] = self._base_dataset.image_transforms(item[cam])
 
         task_idx = item["task_index"].item()
         item["task"] = self._base_dataset.meta.tasks[task_idx]
         return item
+
+    def _selected_camera_keys(self) -> list[str]:
+        camera_keys = list(self._base_dataset.meta.camera_keys)
+        if self._required_camera_keys is None:
+            return camera_keys
+        return [key for key in camera_keys if key in self._required_camera_keys]
+
+    def _selected_video_keys(self) -> list[str]:
+        return [key for key in self._base_dataset.meta.video_keys if key in self._selected_camera_keys()]
 
     def __getattr__(self, name):
         if name.startswith("__"):
@@ -227,31 +247,52 @@ class EpisodeSubsetCompatibleLeRobotDataset(Dataset):
         return {
             "_base_dataset": self._base_dataset,
             "_episode_id_to_local_idx": self._episode_id_to_local_idx,
+            "_required_camera_keys": self._required_camera_keys,
         }
 
     def __setstate__(self, state):
         self._base_dataset = state["_base_dataset"]
         self._episode_id_to_local_idx = state["_episode_id_to_local_idx"]
+        self._required_camera_keys = state["_required_camera_keys"]
 
 
-def _make_selected_episode_compatible_dataset(dataset):
+def _required_camera_keys_from_data_config(data_config: _config.DataConfig) -> set[str] | None:
+    required_camera_keys: set[str] = set()
+    for transform in data_config.repack_transforms.inputs:
+        if not isinstance(transform, _transforms.RepackTransform):
+            continue
+        for source_key in _transforms.flatten_dict(transform.structure).values():
+            if isinstance(source_key, str) and source_key.startswith("observation.images."):
+                required_camera_keys.add(source_key)
+    return required_camera_keys or None
+
+
+def _make_selected_episode_compatible_dataset(dataset, required_camera_keys: set[str] | None = None):
     sub_datasets = getattr(dataset, "_datasets", None)
     if sub_datasets is not None:
-        dataset._datasets = [_make_selected_episode_compatible_dataset(sub_dataset) for sub_dataset in sub_datasets]
+        dataset._datasets = [
+            _make_selected_episode_compatible_dataset(sub_dataset, required_camera_keys) for sub_dataset in sub_datasets
+        ]
         return dataset
 
     if not isinstance(dataset, lerobot_dataset.LeRobotDataset):
         return dataset
 
+    needs_subset_mapping = False
     episodes = getattr(dataset, "episodes", None)
-    if episodes is None:
+    if episodes is not None:
+        selected_episode_ids = [int(ep_id) for ep_id in episodes]
+        needs_subset_mapping = selected_episode_ids != list(range(len(selected_episode_ids)))
+
+    needs_camera_filter = False
+    if required_camera_keys is not None:
+        video_keys = set(getattr(dataset.meta, "video_keys", []))
+        needs_camera_filter = bool(video_keys - required_camera_keys)
+
+    if not needs_subset_mapping and not needs_camera_filter:
         return dataset
 
-    selected_episode_ids = [int(ep_id) for ep_id in episodes]
-    if selected_episode_ids == list(range(len(selected_episode_ids))):
-        return dataset
-
-    return EpisodeSubsetCompatibleLeRobotDataset(dataset)
+    return EpisodeSubsetCompatibleLeRobotDataset(dataset, required_camera_keys=required_camera_keys)
 
 
 def create_torch_dataset(
@@ -269,6 +310,7 @@ def create_torch_dataset(
         return FakeDataset(model_config, num_samples=1024)
 
     selected_episodes = None
+    required_camera_keys = _required_camera_keys_from_data_config(data_config)
     if split != "all" and _episode_split.split_enabled(data_config):
         if split_base_dir is None:
             raise ValueError("split_base_dir is required when using episode-level splits.")
@@ -302,7 +344,7 @@ def create_torch_dataset(
                 for key in data_config.action_sequence_keys
             },
         )
-        dataset = _make_selected_episode_compatible_dataset(dataset)
+        dataset = _make_selected_episode_compatible_dataset(dataset, required_camera_keys)
         if data_config.prompt_from_task:
             for n, d in enumerate(dataset._datasets):
                 dataset._datasets[n] = TransformedDataset(
@@ -326,7 +368,7 @@ def create_torch_dataset(
                 for key in data_config.action_sequence_keys
             },
         )
-        dataset = _make_selected_episode_compatible_dataset(dataset)
+        dataset = _make_selected_episode_compatible_dataset(dataset, required_camera_keys)
 
         if data_config.prompt_from_task:
             dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])

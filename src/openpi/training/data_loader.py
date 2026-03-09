@@ -68,6 +68,10 @@ class DataLoader(Protocol[T_co]):
         """Get the data config for this data loader."""
         raise NotImplementedError("Subclasses of DataLoader should implement data_config.")
 
+    def last_metadata(self) -> dict[str, np.ndarray] | None:
+        """Get metadata for the last yielded batch, if available."""
+        raise NotImplementedError("Subclasses of DataLoader should implement last_metadata.")
+
     def __iter__(self) -> Iterator[T_co]:
         raise NotImplementedError("Subclasses of DataLoader should implement __iter__.")
 
@@ -500,6 +504,7 @@ class TorchDataLoader:
 
         self._sharding = sharding
         self._num_batches = num_batches
+        self._last_host_batch = None
 
         mp_context = None
         if num_workers > 0:
@@ -525,6 +530,10 @@ class TorchDataLoader:
     def torch_loader(self) -> torch.utils.data.DataLoader:
         return self._data_loader
 
+    @property
+    def last_host_batch(self):
+        return self._last_host_batch
+
     def __iter__(self):
         num_items = 0
         while True:
@@ -537,6 +546,7 @@ class TorchDataLoader:
                 except StopIteration:
                     break  # We've exhausted the dataset. Create a new iterator and start over.
                 num_items += 1
+                self._last_host_batch = batch
                 yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
 
 
@@ -621,22 +631,50 @@ class DataLoaderImpl(DataLoader):
     def __init__(self, data_config: _config.DataConfig, data_loader: TorchDataLoader | RLDSDataLoader):
         self._data_config = data_config
         self._data_loader = data_loader
+        self._last_metadata: dict[str, np.ndarray] | None = None
 
     def data_config(self) -> _config.DataConfig:
         return self._data_config
 
+    def last_metadata(self) -> dict[str, np.ndarray] | None:
+        if self._last_metadata is None:
+            return None
+        return {key: np.asarray(value).copy() for key, value in self._last_metadata.items()}
+
     def __iter__(self):
         for batch in self._data_loader:
+            host_batch = getattr(self._data_loader, "last_host_batch", None)
+            self._last_metadata = _extract_batch_metadata(host_batch if host_batch is not None else batch)
             yield _model.Observation.from_dict(batch), batch["actions"]
 
 class DataLoaderACOTImpl(DataLoader):
     def __init__(self, data_config: _config.DataConfig, data_loader: TorchDataLoader):
         self._data_config = data_config
         self._data_loader = data_loader
+        self._last_metadata: dict[str, np.ndarray] | None = None
 
     def data_config(self) -> _config.DataConfig:
         return self._data_config
 
+    def last_metadata(self) -> dict[str, np.ndarray] | None:
+        if self._last_metadata is None:
+            return None
+        return {key: np.asarray(value).copy() for key, value in self._last_metadata.items()}
+
     def __iter__(self):
         for batch in self._data_loader:
+            host_batch = getattr(self._data_loader, "last_host_batch", None)
+            self._last_metadata = _extract_batch_metadata(host_batch if host_batch is not None else batch)
             yield _model.Observation.from_dict(batch), batch["actions"], batch["coarse_actions"]
+
+
+def _extract_batch_metadata(batch) -> dict[str, np.ndarray] | None:
+    if batch is None:
+        return None
+
+    metadata = {}
+    for key in ("task", "episode_index", "frame_index"):
+        if isinstance(batch, dict) and key in batch:
+            metadata[key] = np.asarray(batch[key])
+
+    return metadata or None

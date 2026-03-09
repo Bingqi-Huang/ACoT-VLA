@@ -1,7 +1,10 @@
 import dataclasses
 import functools
+import json
 import logging
 import platform
+import re
+import time
 from typing import Any
 import os
 import etils.epath as epath
@@ -19,6 +22,7 @@ import wandb
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
+import openpi.transforms as _transforms
 import openpi.training.checkpoints as _checkpoints
 import openpi.training.config as _config
 import openpi.training.data_loader as _data_loader
@@ -68,6 +72,116 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
 
     if log_code:
         wandb.run.log_code(epath.Path(__file__).parent.parent)
+
+
+def build_action_output_transform(data_config: _config.DataConfig) -> _transforms.DataTransformFn:
+    return _transforms.compose(
+        [
+            *data_config.model_transforms.outputs,
+            _transforms.Unnormalize(data_config.norm_stats, use_quantiles=data_config.use_quantile_norm),
+            *data_config.data_transforms.outputs,
+        ]
+    )
+
+
+def _normalize_task_name(task_name: Any) -> str:
+    if isinstance(task_name, bytes):
+        return task_name.decode()
+    if isinstance(task_name, np.ndarray):
+        if task_name.shape == ():
+            return _normalize_task_name(task_name.item())
+        raise ValueError(f"Expected scalar task name, got shape {task_name.shape}")
+    return str(task_name)
+
+
+def _sanitize_metric_component(name: str) -> str:
+    sanitized = re.sub(r"[^0-9A-Za-z_.-]+", "_", name).strip("_")
+    return sanitized or "unknown"
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _json_ready(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(v) for v in value]
+    if isinstance(value, (np.floating, np.integer, np.bool_)):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, jax.Array):
+        return _json_ready(np.asarray(jax.device_get(value)))
+    return value
+
+
+class JsonlMetricLogger:
+    def __init__(self, path: epath.PathLike):
+        self._path = epath.Path(path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+
+    def log(self, payload: dict[str, Any]) -> None:
+        with self._path.open("a") as f:
+            f.write(json.dumps(_json_ready(payload), sort_keys=True) + "\n")
+
+
+def _last_batch_metadata(data_loader: _data_loader.DataLoader[Any]) -> dict[str, np.ndarray] | None:
+    return data_loader.last_metadata()
+
+
+def _summarize_train_batch_metrics(
+    *,
+    batch: tuple[_model.Observation, _model.Actions] | tuple[_model.Observation, _model.Actions, _model.CoarseActions],
+    batch_metrics: dict[str, Any],
+    batch_metadata: dict[str, np.ndarray] | None,
+    action_output_transform: _transforms.DataTransformFn,
+) -> dict[str, float]:
+    observation = batch[0]
+    target_actions = np.asarray(jax.device_get(batch[1]))
+    predicted_actions = np.asarray(jax.device_get(batch_metrics["predicted_actions"]))
+    loss_per_example = np.asarray(jax.device_get(batch_metrics["loss_per_example"]))
+    state = np.asarray(jax.device_get(observation.state))
+
+    raw_predicted_actions = np.asarray(
+        action_output_transform({"state": state.copy(), "actions": predicted_actions.copy()})["actions"]
+    )
+    raw_target_actions = np.asarray(action_output_transform({"state": state.copy(), "actions": target_actions.copy()})["actions"])
+    abs_error = np.abs(raw_predicted_actions - raw_target_actions)
+
+    metrics: dict[str, float] = {
+        "train/batch_loss_eval": float(loss_per_example.mean()),
+        "train/action_mae/overall": float(abs_error.mean()),
+    }
+
+    if batch_metadata is not None and "task" in batch_metadata:
+        task_names = np.asarray(batch_metadata["task"])
+        if task_names.shape[0] == loss_per_example.shape[0]:
+            for task_name in np.unique(task_names):
+                task_mask = task_names == task_name
+                task_key = _sanitize_metric_component(_normalize_task_name(task_name))
+                metrics[f"train/task/{task_key}/loss"] = float(loss_per_example[task_mask].mean())
+
+    per_action_dim_mae = abs_error.mean(axis=(0, 1))
+    for index, value in enumerate(per_action_dim_mae):
+        metrics[f"train/action_mae/dim_{index:02d}"] = float(value)
+
+    if raw_target_actions.shape[-1] == 8:
+        joint_mae = per_action_dim_mae[:7]
+        metrics["train/joint_mae/overall"] = float(joint_mae.mean())
+        for index, value in enumerate(joint_mae):
+            metrics[f"train/joint_mae/joint_{index}"] = float(value)
+
+        gripper_target = raw_target_actions[..., -1]
+        if np.all(np.isclose(gripper_target, 0.0, atol=1e-4) | np.isclose(gripper_target, 1.0, atol=1e-4)):
+            gripper_prediction = raw_predicted_actions[..., -1]
+            if np.any((gripper_prediction < 0.0) | (gripper_prediction > 1.0)):
+                gripper_prediction = 1.0 / (1.0 + np.exp(-gripper_prediction))
+            gripper_prediction = np.clip(gripper_prediction, 1e-6, 1.0 - 1e-6)
+            gripper_target_binary = gripper_target >= 0.5
+            metrics["train/gripper_accuracy"] = float(((gripper_prediction >= 0.5) == gripper_target_binary).mean())
+            metrics["train/gripper_bce"] = float(
+                (-gripper_target * np.log(gripper_prediction) - (1.0 - gripper_target) * np.log(1.0 - gripper_prediction)).mean()
+            )
+
+    return metrics
 
 
 def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
@@ -296,6 +410,27 @@ def eval_step(
     loss = loss_fn(model, eval_rng, observation, actions)
     return {"val_loss": loss}
 
+
+@at.typecheck
+def train_batch_metrics_step(
+    config: _config.TrainConfig,
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    batch: tuple[_model.Observation, _model.Actions],
+) -> dict[str, at.Array]:
+    del config
+    model = nnx.merge(state.model_def, state.params)
+    model.eval()
+    eval_rng = jax.random.fold_in(rng, state.step)
+    observation, actions = batch
+    typed_model = model
+    loss_per_example = typed_model.compute_loss_per_example(eval_rng, observation, actions, train=False)  # type: ignore[attr-defined]
+    predicted_actions = typed_model.teacher_force_actions(observation, actions, time=0.5)  # type: ignore[attr-defined]
+    return {
+        "loss_per_example": loss_per_example,
+        "predicted_actions": predicted_actions,
+    }
+
 @at.typecheck
 def acot_train_step(
     config: _config.TrainConfig,
@@ -410,6 +545,38 @@ def acot_eval_step(
     return {"val_loss": loss}
 
 
+@at.typecheck
+def acot_train_batch_metrics_step(
+    config: _config.TrainConfig,
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    batch: tuple[_model.Observation, _model.Actions, _model.CoarseActions],
+) -> dict[str, at.Array]:
+    del config
+    model = nnx.merge(state.model_def, state.params)
+    model.eval()
+    eval_rng = jax.random.fold_in(rng, state.step)
+    observation, actions, coarse_actions = batch
+    typed_model = model
+    loss_per_example = typed_model.compute_loss_per_example(  # type: ignore[attr-defined]
+        eval_rng,
+        observation,
+        actions,
+        coarse_actions,
+        train=False,
+    )
+    predicted_actions = typed_model.teacher_force_actions(  # type: ignore[attr-defined]
+        observation,
+        actions,
+        coarse_actions,
+        time=0.5,
+    )
+    return {
+        "loss_per_example": loss_per_example,
+        "predicted_actions": predicted_actions,
+    }
+
+
 def main(config: _config.TrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
@@ -442,8 +609,11 @@ def main(config: _config.TrainConfig):
         sharding=data_sharding,
         shuffle=True,
     )
+    action_output_transform = build_action_output_transform(data_loader.data_config())
+    metrics_logger = JsonlMetricLogger(config.checkpoint_dir / "train_metrics.jsonl")
     data_iter = iter(data_loader)
     batch = next(data_iter)
+    batch_metadata = _last_batch_metadata(data_loader)
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
 
     val_loader = None
@@ -477,11 +647,16 @@ def main(config: _config.TrainConfig):
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
 
     trainable_params_sharding = sharding.fsdp_sharding(train_state.params.filter(config.trainable_filter), mesh)
+    ptrain_batch_metrics = None
     if config.model.model_type == _model.ModelType.ACOT_VLA_PI05 or config.model.model_type == _model.ModelType.ACOT_VLA_PI0:
         pcompute_grads = jax.jit(
             functools.partial(acot_compute_grads, config),
             in_shardings=(replicated_sharding, train_state_sharding, data_sharding, replicated_sharding),
             out_shardings=(trainable_params_sharding, replicated_sharding),
+        )
+        ptrain_batch_metrics = jax.jit(
+            functools.partial(acot_train_batch_metrics_step, config),
+            in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
         )
         peval_step = jax.jit(
             functools.partial(acot_eval_step, config),
@@ -494,11 +669,17 @@ def main(config: _config.TrainConfig):
             in_shardings=(replicated_sharding, train_state_sharding, data_sharding, replicated_sharding),
             out_shardings=(trainable_params_sharding, replicated_sharding),
         )
+        ptrain_batch_metrics = jax.jit(
+            functools.partial(train_batch_metrics_step, config),
+            in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        )
         peval_step = jax.jit(
             functools.partial(eval_step, config),
             in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
             out_shardings=replicated_sharding,
         )
+        if config.model.model_type == _model.ModelType.PI0_FAST:
+            ptrain_batch_metrics = None
     papply_grads = jax.jit(
         functools.partial(apply_grads, config),
         in_shardings=(replicated_sharding, train_state_sharding, trainable_params_sharding),
@@ -518,16 +699,24 @@ def main(config: _config.TrainConfig):
         dynamic_ncols=True,
     )
 
+    lr_schedule = config.lr_schedule.create()
+    train_start_time = time.perf_counter()
+    last_log_time = train_start_time
     infos = []
     for step in pbar:
         accumulated_grads = None
         total_loss = None
+        metric_batch = batch
+        metric_batch_metadata = batch_metadata
         with sharding.set_mesh(mesh):
             for micro_step in range(config.grad_accum_steps):
+                metric_batch = batch
+                metric_batch_metadata = batch_metadata
                 grads, loss = pcompute_grads(train_rng, train_state, batch, micro_step)
                 total_loss = loss if total_loss is None else total_loss + loss
                 accumulated_grads = grads if accumulated_grads is None else jax.tree.map(jnp.add, accumulated_grads, grads)
                 batch = next(data_iter)
+                batch_metadata = _last_batch_metadata(data_loader)
 
             assert accumulated_grads is not None
             assert total_loss is not None
@@ -537,24 +726,78 @@ def main(config: _config.TrainConfig):
         infos.append(info)
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
-            reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
-            info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
+            reduced_info = {k: float(v) for k, v in jax.device_get(jax.tree.map(jnp.mean, stacked_infos)).items()}
+            batch_metric_payload = {}
+            if ptrain_batch_metrics is not None:
+                with sharding.set_mesh(mesh):
+                    batch_metrics = jax.device_get(ptrain_batch_metrics(train_rng, train_state, metric_batch))
+                batch_metric_payload = _summarize_train_batch_metrics(
+                    batch=metric_batch,
+                    batch_metrics=batch_metrics,
+                    batch_metadata=metric_batch_metadata,
+                    action_output_transform=action_output_transform,
+                )
+
+            train_state_step = int(jax.device_get(train_state.step))
+            now = time.perf_counter()
+            elapsed = max(now - last_log_time, 1e-6)
+            wall_time_sec = now - train_start_time
+            throughput_metrics = {
+                "train/step": step,
+                "train/train_state_step": train_state_step,
+                "train/loss": reduced_info["loss"],
+                "train/grad_norm": reduced_info["grad_norm"],
+                "train/param_norm": reduced_info["param_norm"],
+                "train/learning_rate": float(jax.device_get(lr_schedule(train_state_step))),
+                "train/steps_per_sec": len(infos) / elapsed,
+                "train/samples_per_sec": len(infos) * config.batch_size * config.grad_accum_steps / elapsed,
+                "train/wall_time_sec": wall_time_sec,
+            }
+            log_payload = {
+                **reduced_info,
+                **throughput_metrics,
+                **batch_metric_payload,
+            }
+            info_str = ", ".join(
+                [
+                    f"loss={log_payload['train/loss']:.4f}",
+                    f"lr={log_payload['train/learning_rate']:.2e}",
+                    f"grad_norm={log_payload['train/grad_norm']:.4f}",
+                    f"steps/sec={log_payload['train/steps_per_sec']:.2f}",
+                    f"wall={log_payload['train/wall_time_sec']:.1f}s",
+                ]
+            )
             pbar.write(f"Step {step}: {info_str}")
-            wandb.log(reduced_info, step=step)
+            wandb.log(log_payload, step=step)
+            metrics_logger.log({"event": "train", **log_payload})
             infos = []
+            last_log_time = now
 
         if val_loader is not None and (step % config.val_interval == 0 or step == config.num_train_steps - 1):
             val_infos = []
             with sharding.set_mesh(mesh):
                 for val_batch in val_loader:
                     val_infos.append(peval_step(train_rng, train_state, val_batch))
-            reduced_val_info = jax.device_get(jax.tree.map(jnp.mean, common_utils.stack_forest(val_infos)))
+            reduced_val_info = {k: float(v) for k, v in jax.device_get(jax.tree.map(jnp.mean, common_utils.stack_forest(val_infos))).items()}
+            reduced_val_info["val/loss"] = reduced_val_info["val_loss"]
+            reduced_val_info["train/step"] = step
+            reduced_val_info["train/train_state_step"] = int(jax.device_get(train_state.step))
+            reduced_val_info["train/wall_time_sec"] = time.perf_counter() - train_start_time
             val_info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_val_info.items())
             pbar.write(f"Validation {step}: {val_info_str}")
             wandb.log(reduced_val_info, step=step)
+            metrics_logger.log({"event": "val", **reduced_val_info})
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
             _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+            checkpoint_payload = {
+                "checkpoint/step": step,
+                "checkpoint/train_state_step": int(jax.device_get(train_state.step)),
+                "checkpoint/wall_time_sec": time.perf_counter() - train_start_time,
+            }
+            wandb.log(checkpoint_payload, step=step)
+            metrics_logger.log({"event": "checkpoint", **checkpoint_payload})
+            pbar.write(f"Checkpoint {step}: wall={checkpoint_payload['checkpoint/wall_time_sec']:.1f}s")
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()

@@ -85,6 +85,7 @@ Last updated: 2026-03-09
 - Architecture changes are allowed only if the final serving interface remains compliant.
 - For meaningful finetuning validation, train/val separation now happens strictly at the episode level for LeRobot datasets when `episode_split` is configured.
 - Offline checkpoint selection can now be done on the val episode split without simulation rollout, using per-checkpoint JSON metrics and a summary CSV.
+- Finetuning runs now emit richer training diagnostics during `scripts/train.py`, including train loss, per-task train loss when task metadata is present, learning rate, grad norm, param norm, throughput, wall-clock time, checkpoint events, and batch-level action MAE metrics to both W&B and `train_metrics.jsonl` inside the experiment checkpoint directory.
 
 ## Known Open Work
 
@@ -92,6 +93,7 @@ Last updated: 2026-03-09
 - Validate a small debug training run on the actual target machine with `grad_accum_steps > 1`.
 - Validate the new episode-split training path end-to-end on the clean-desktop smoke config and confirm validation loss logs as expected.
 - Run the new offline evaluator on a real clean-desktop experiment directory and confirm the JSON/CSV outputs match expectations.
+- Confirm the new `train_metrics.jsonl` contents and W&B curves on a real clean-desktop run, especially per-task task-name recovery and batch-level action/gripper metrics.
 - Extract adapters from a real generalist/specialist checkpoint set and verify routed loading against those files.
 - Validate the `AdapterRouted` CLI path with a real checkpoint + adapter directory.
 - Measure task-switch latency once real adapter files are available.
@@ -102,6 +104,7 @@ Last updated: 2026-03-09
 - `python3 -m py_compile` passes for the modified serving and adapter files.
 - `python3 -m py_compile` passes for the new episode-split and validation files.
 - `python3 -m py_compile` passes for the new offline evaluation files and the added model hooks.
+- `python3 -m py_compile` passes for the new training logging changes in `scripts/train.py` and `src/openpi/training/data_loader.py`.
 - `git diff --check` passes.
 - `uv run pytest ...` could not be completed in this environment because dependency resolution attempted network access and failed on DNS/package download.
 - Direct Python smoke execution of the new split helpers is currently blocked in this environment because the installed `ml_dtypes` version is too old for JAX import (`0.4.1`, JAX requires `>=0.5`).

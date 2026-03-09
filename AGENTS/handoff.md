@@ -65,6 +65,12 @@ What changed:
   - `src/openpi/training/offline_eval_test.py`
   - `docs/reasoning2action_offline_eval.md`
 - Added deterministic teacher-forced offline hooks to `src/openpi/models/pi0.py` and `src/openpi/models/acot_vla.py` so validation can report per-example loss and action-reconstruction metrics without rollout.
+- Improved train-time logging in `scripts/train.py`:
+  - logs `train/loss`, `train/grad_norm`, `train/param_norm`, `train/learning_rate`, `train/steps_per_sec`, `train/samples_per_sec`, `train/wall_time_sec`
+  - logs per-task train loss when raw batch `task` metadata is available
+  - logs batch-level action-dimension MAE, joint MAE, and gripper metrics for pi0/pi0.5 model families
+  - writes the same flat metrics stream to `<checkpoint_dir>/train_metrics.jsonl`
+- Extended `src/openpi/training/data_loader.py` so the training loop can recover raw batch metadata (`task`, `episode_index`, `frame_index`) for logging without changing the model input path.
 
 What was verified:
 
@@ -87,11 +93,13 @@ What is still broken or unknown:
 - Direct runtime smoke checks that import JAX are blocked because the environment currently has `ml_dtypes==0.4.1`, while JAX now requires `>=0.5`.
 - The new val-loss path still needs a real clean-desktop training run to confirm the split manifest, train-only stats, and val-only loader behave correctly on actual data.
 - The new offline evaluator still needs one real experiment directory run to confirm batch loading, per-task task-name recovery, and JSON/CSV outputs on actual Reasoning2Action checkpoints.
+- The new train logging still needs one real clean-desktop run to confirm task metadata survives as expected and that the additional batch-metric JIT does not add unacceptable overhead.
 
 Immediate next step:
 
 - Run `scripts/generate_episode_split.py` for `acot_challenge_generalist_lora_clean_desktop`, recompute norm stats with `--split train`, then launch a short debug training run and confirm validation loss logs on the val split.
 - After the debug run produces checkpoints, execute `scripts/eval_offline.py` on the experiment directory and inspect `eval/summary.csv` for checkpoint ranking.
+- Inspect `<checkpoint_dir>/train_metrics.jsonl` from the same debug run and verify that the expected `train/task/*` and `train/action_mae/*` keys appear.
 
 Git note:
 

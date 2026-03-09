@@ -35,7 +35,7 @@ export ACOT_CHALLENGE_DATA_ROOT=~/Datasets/lerobot/Reasoning2Action-Sim
 If you want to override the base initialization checkpoint, set:
 
 ```bash
-export ACOT_CHALLENGE_INIT_WEIGHTS=/path/to/base/params
+export ACOT_CHALLENGE_INIT_WEIGHTS=/data/admins/bingqi/Projects/ACoT-VLA/checkpoints/baseline_checkpoint/params
 ```
 
 Optional local `uv` cache:

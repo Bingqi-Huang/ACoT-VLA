@@ -15,4 +15,4 @@ echo "[run_norm_and_train] Computing norm stats for ${CONFIG_NAME}..."
 uv run python scripts/compute_norm_stats.py --config-name "${CONFIG_NAME}"
 
 echo "[run_norm_and_train] Norm stats finished. Starting training for ${CONFIG_NAME}/${EXP_NAME}..."
-bash scripts/train.sh "${CONFIG_NAME}" "${EXP_NAME}" --overwrite=true "$@"
+bash scripts/train.sh "${CONFIG_NAME}" "${EXP_NAME}" --overwrite "$@"

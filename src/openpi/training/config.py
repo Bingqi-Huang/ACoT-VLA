@@ -2331,20 +2331,22 @@ _CONFIGS = [
         freeze_filter=_reasoning2action_lora_freeze_filter(),
     ),
     TrainConfig(
-        name="acot_challenge_generalist_lora_3_tasks",
+        name="acot_challenge_generalist_lora_5_tasks",
         model=_reasoning2action_lora_model(),
         data=_reasoning2action_data_config(
             _reasoning2action_repo_ids(
                 "open_door",
                 "hold_pot",
+                "pour_workpiece",
+                "place_block_into_box",
                 "clean_the_desktop_part_1",
                 "clean_the_desktop_part_2",
             ),
             asset_id=os.getenv(
                 "ACOT_CHALLENGE_GENERALIST_CLEAN_DESKTOP_ASSET_ID",
-                "reasoning2action_sim_generalist_3_tasks",
+                "reasoning2action_sim_generalist_5_tasks",
             ),
-            split_name="acot_challenge_generalist_lora_3_tasks",
+            split_name="acot_challenge_generalist_lora_5_tasks",
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=3_000,
@@ -2357,15 +2359,15 @@ _CONFIGS = [
         weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
             os.getenv(
                 "ACOT_CHALLENGE_INIT_WEIGHTS",
-                "gs://openpi-assets/checkpoints/pi05_base/params",
+                "/data/admins/bingqi/Projects/ACoT-VLA/checkpoints/baseline_checkpoint/params",
             )
         ),
-        num_train_steps=35_000,
+        num_train_steps=40_000,
         save_interval=2500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 200,
         val_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
         val_num_batches=8 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
         num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
-        batch_size=60 if not os.getenv("DEBUG_MODE", default=False) == "true" else 3,
+        batch_size=96 if not os.getenv("DEBUG_MODE", default=False) == "true" else 3,
         grad_accum_steps=1 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         freeze_filter=_reasoning2action_lora_freeze_filter(),
     ),

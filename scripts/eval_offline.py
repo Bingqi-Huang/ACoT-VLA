@@ -51,7 +51,7 @@ def _evaluate_checkpoint(
         num_workers=num_workers,
     )
     output_transform = _offline_eval.build_action_output_transform(data_config)
-    loss_fn = nnx_utils.module_jit(model.compute_loss_per_example)  # type: ignore[arg-type]
+    loss_fn = nnx_utils.module_jit(model.compute_loss_per_example, static_argnames=("train",))  # type: ignore[arg-type]
     predict_fn = nnx_utils.module_jit(model.teacher_force_actions)  # type: ignore[arg-type]
 
     accumulator: _offline_eval.OfflineEvalAccumulator | None = None

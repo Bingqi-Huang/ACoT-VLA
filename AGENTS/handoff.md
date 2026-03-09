@@ -73,6 +73,7 @@ What changed:
   - explicitly registers the `train/*`, `val/*`, and `checkpoint/*` metric families with W&B so the new series appear with consistent step axes
 - Extended `src/openpi/training/data_loader.py` so the training loop can recover raw batch metadata (`task`, `episode_index`, `frame_index`) for logging without changing the model input path.
 - Fixed offline eval for ACOT data configs in `src/openpi/training/offline_eval.py` by preserving dynamic attrs like `joint_action_shifts` when swapping in checkpoint norm stats; this addresses the clean-desktop eval crash where `create_torch_dataset()` received a plain `DataConfig`.
+- Fixed a second offline eval issue in `scripts/eval_offline.py` by treating `train=False` as a static kwarg when JIT-compiling `compute_loss_per_example`; this addresses the `TracerBoolConversionError` triggered by `if train:` inside `preprocess_observation()`.
 
 What was verified:
 

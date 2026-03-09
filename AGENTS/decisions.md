@@ -41,3 +41,17 @@ Why:
 Consequence:
 
 - Future agents should update this folder after significant progress.
+
+Date: 2026-03-09
+
+Decision:
+
+- Treat LeRobot finetuning validation as episode-split-constrained rather than sample-split-constrained.
+
+Why:
+
+- Frame-level or shuffled sample-level validation leaks temporal context across train and validation and is not meaningful for the Reasoning2Action smoke finetuning tasks.
+
+Consequence:
+
+- Train/validation splits are now generated per dataset by `episode_index`, saved to JSON manifests, reused across training/stat computation, and validation should only be interpreted when norm stats are computed from the train split.

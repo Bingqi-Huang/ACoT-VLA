@@ -27,11 +27,18 @@ def create_torch_dataloader(
     data_config: _config.DataConfig,
     batch_size: int,
     model_config: _model.BaseModelConfig,
+    split: str,
+    split_base_dir: pathlib.Path,
     max_frames: int | None = None,
 ) -> tuple[_data_loader.Dataset, int]:
     if data_config.repo_id is None:
         raise ValueError("Data config must have a repo_id")
-    dataset = _data_loader.create_torch_dataset(data_config, model_config)
+    dataset = _data_loader.create_torch_dataset(
+        data_config,
+        model_config,
+        split=split,
+        split_base_dir=split_base_dir,
+    )
     dataset = _data_loader.TransformedDataset(
         dataset,
         [
@@ -64,8 +71,10 @@ def create_rlds_dataloader(
     data_config: _config.DataConfig,
     action_horizon: int,
     batch_size: int,
+    split: str,
     max_frames: int | None = None,
 ) -> tuple[_data_loader.Dataset, int]:
+    del split
     dataset = _data_loader.create_rlds_dataset(data_config, action_horizon, batch_size, shuffle=False)
     dataset = _data_loader.IterableTransformedDataset(
         dataset,
@@ -96,17 +105,23 @@ def _default_output_dir(config: _config.TrainConfig) -> pathlib.Path:
     return pathlib.Path(assets_base_dir) / data_config.asset_id
 
 
-def main(config_name: str, max_frames: int | None = None, output_dir: str | None = None):
+def main(
+    config_name: str,
+    max_frames: int | None = None,
+    output_dir: str | None = None,
+    split: str = "train",
+):
     config = _config.get_config(config_name)
     data_config = config.data.create(config.assets_dirs, config.model)
+    split_base_dir = config.assets_dirs / "episode_splits"
 
     if data_config.rlds_data_dir is not None:
         data_loader, num_batches = create_rlds_dataloader(
-            data_config, config.model.action_horizon, config.batch_size, max_frames
+            data_config, config.model.action_horizon, config.batch_size, split, max_frames
         )
     else:
         data_loader, num_batches = create_torch_dataloader(
-            data_config, config.batch_size, config.model, max_frames
+            data_config, config.batch_size, config.model, split, split_base_dir, max_frames
         )
 
     keys = ["state", "actions", "coarse_actions"]

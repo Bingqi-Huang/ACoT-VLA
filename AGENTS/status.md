@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-03-08
+Last updated: 2026-03-09
 
 ## Current State
 
@@ -39,6 +39,20 @@ Last updated: 2026-03-08
 - Adjusted Python packaging for the current Ubuntu 22.04 / Python 3.11 environment:
   - pinned transitive `av` resolution to `14.0.1` via `tool.uv.override-dependencies`
   - replaced deprecated `tool.uv.dev-dependencies` in `packages/openpi-client/pyproject.toml`
+- Added deterministic episode-level train/validation splits for LeRobot finetuning datasets:
+  - `EpisodeSplitConfig` on `DataConfig`
+  - split manifests saved under `assets/<config>/episode_splits/*.json`
+  - train loader now reads only train episodes
+  - validation loader now reads only validation episodes
+  - per-task episode/frame counts are printed for both splits
+- Updated `scripts/compute_norm_stats.py` to support `--split train|val` so norm stats can be computed from train episodes only.
+- Added validation support to `scripts/train.py`:
+  - `TrainConfig.val_interval`
+  - `TrainConfig.val_num_batches`
+  - validation loss logging against the val episode split
+- Added split tooling and docs:
+  - `scripts/generate_episode_split.py`
+  - `docs/reasoning2action_episode_split.md`
 
 ## Dataset Understanding
 
@@ -61,11 +75,13 @@ Last updated: 2026-03-08
 - Submission is done by pushing a Docker image and pasting the full image URL on the platform.
 - The runtime contract is stricter than the training process.
 - Architecture changes are allowed only if the final serving interface remains compliant.
+- For meaningful finetuning validation, train/val separation now happens strictly at the episode level for LeRobot datasets when `episode_split` is configured.
 
 ## Known Open Work
 
 - Finish or verify full extraction of all dataset parts.
 - Validate a small debug training run on the actual target machine with `grad_accum_steps > 1`.
+- Validate the new episode-split training path end-to-end on the clean-desktop smoke config and confirm validation loss logs as expected.
 - Extract adapters from a real generalist/specialist checkpoint set and verify routed loading against those files.
 - Validate the `AdapterRouted` CLI path with a real checkpoint + adapter directory.
 - Measure task-switch latency once real adapter files are available.
@@ -74,5 +90,7 @@ Last updated: 2026-03-08
 
 - `python3 -m py_compile` passes for the modified model/config/training files.
 - `python3 -m py_compile` passes for the modified serving and adapter files.
+- `python3 -m py_compile` passes for the new episode-split and validation files.
 - `git diff --check` passes.
 - `uv run pytest ...` could not be completed in this environment because dependency resolution attempted network access and failed on DNS/package download.
+- Direct Python smoke execution of the new split helpers is currently blocked in this environment because the installed `ml_dtypes` version is too old for JAX import (`0.4.1`, JAX requires `>=0.5`).

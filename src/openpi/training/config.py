@@ -69,7 +69,7 @@ class AssetsConfig:
 @dataclasses.dataclass(frozen=True)
 class DataConfig:
     # LeRobot repo id. If None, fake data will be created.
-    repo_id: str | None = None
+    repo_id: str | Sequence[str] | None = None
     # Directory within the assets directory containing the data assets.
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
@@ -103,6 +103,20 @@ class DataConfig:
     rlds_data_dir: str | None = None
     # Action space for DROID dataset.
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
+    # Optional deterministic train/validation split at the episode level.
+    episode_split: "EpisodeSplitConfig | None" = None
+
+
+@dataclasses.dataclass(frozen=True)
+class EpisodeSplitConfig:
+    # Fraction of episodes assigned to the training split.
+    train_ratio: float = 0.8
+    # Seed used to shuffle episodes before splitting.
+    seed: int = 42
+    # Where to persist the split manifest. Defaults to <assets_dir>/episode_splits.
+    output_dir: str | None = None
+    # Optional friendly name for the split file.
+    split_name: str | None = None
 
 
 class GroupFactory(Protocol):
@@ -1194,6 +1208,10 @@ class TrainConfig:
     log_interval: int = 100
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
+    # How often (in steps) to run validation. If None, validation is disabled.
+    val_interval: int | None = None
+    # Number of validation batches to evaluate each time validation runs.
+    val_num_batches: int = 8
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
     keep_period: int | None = 5000
 
@@ -1353,6 +1371,7 @@ def _reasoning2action_data_config(
     prompt_keys: Sequence[str] | None = None,
     *,
     asset_id: str,
+    split_name: str | None = None,
 ) -> LerobotACOTGo2DataConfig:
     selected_prompt_map = (
         _REASONING2ACTION_PROMPT_MAP
@@ -1368,7 +1387,11 @@ def _reasoning2action_data_config(
         ),
         prompt_map_inject_to_training=selected_prompt_map,
         repack_transforms=_reasoning2action_repack_transforms(),
-        base_config=DataConfig(dataloader_sampler="subtask", prompt_from_hl_instruction=True),
+        base_config=DataConfig(
+            dataloader_sampler="subtask",
+            prompt_from_hl_instruction=True,
+            episode_split=EpisodeSplitConfig(split_name=split_name),
+        ),
         joint_action_shifts=(2, 1),
         extra_delta_transform=(True, True),
         delta_action_mask=_transforms.make_bool_mask(14, -18),
@@ -1392,6 +1415,7 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
                     _reasoning2action_repo_ids(*dataset_names),
                     prompt_keys,
                     asset_id=generalist_asset_id,
+                    split_name=config_name,
                 ),
                 lr_schedule=_optimizer.CosineDecaySchedule(
                     warmup_steps=500,
@@ -2245,6 +2269,7 @@ _CONFIGS = [
                 "clean_the_desktop_part_2",
             ),
             asset_id=os.getenv("ACOT_CHALLENGE_GENERALIST_ASSET_ID", "reasoning2action_sim_generalist"),
+            split_name="acot_challenge_generalist_lora_all",
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=10_000,
@@ -2280,6 +2305,7 @@ _CONFIGS = [
                 "ACOT_CHALLENGE_GENERALIST_CLEAN_DESKTOP_ASSET_ID",
                 "reasoning2action_sim_generalist_clean_desktop",
             ),
+            split_name="acot_challenge_generalist_lora_clean_desktop",
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=3_000,
@@ -2297,6 +2323,8 @@ _CONFIGS = [
         ),
         num_train_steps=35_000,
         save_interval=2500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 200,
+        val_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
+        val_num_batches=8 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
         num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         batch_size=60 if not os.getenv("DEBUG_MODE", default=False) == "true" else 3,
         grad_accum_steps=1 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,

@@ -18,7 +18,7 @@ Immediate next step:
 
 ## Current Note
 
-Date: 2026-03-08
+Date: 2026-03-09
 
 Author: Codex
 
@@ -50,6 +50,15 @@ What changed:
 - Patched Python packaging to avoid the current `av==14.4.0` source-build failure on Ubuntu 22.04:
   - root `pyproject.toml` now overrides `av` to `14.0.1`
   - `packages/openpi-client/pyproject.toml` now uses `dependency-groups.dev` instead of deprecated `tool.uv.dev-dependencies`
+- Added strict episode-level train/validation split support for LeRobot finetuning datasets:
+  - `EpisodeSplitConfig` added to `DataConfig`
+  - new split manifest utility in `src/openpi/training/episode_split.py`
+  - split-aware dataset construction in `src/openpi/training/data_loader.py`
+  - `src/openpi/training/sampler.py` now respects filtered episode IDs instead of assuming contiguous episode indices
+- Added split-aware validation to `scripts/train.py` with `val_interval` and `val_num_batches`.
+- Updated `scripts/compute_norm_stats.py` to support `--split`, defaulting the intended workflow to train-only stats.
+- Added `scripts/generate_episode_split.py` and `docs/reasoning2action_episode_split.md`.
+- Added focused tests in `src/openpi/training/episode_split_test.py`.
 
 What was verified:
 
@@ -57,6 +66,7 @@ What was verified:
 - Repo inference path loads checkpoint directories with `params` and `assets`.
 - `python3 -m py_compile` passes on the modified files.
 - `git diff --check` passes.
+- `python3 -m py_compile` passes on the new episode-split and validation files.
 
 What is still broken or unknown:
 
@@ -66,10 +76,13 @@ What is still broken or unknown:
 - The new gradient accumulation path has not yet been exercised on actual hardware.
 - No real adapter `.npz` files have been extracted and smoke-tested yet.
 - The refactored routed adapter policy still needs runtime validation with real adapter files to confirm switch latency and no unexpected recompiles.
+- `pytest` is not installed in the checked environment, so the new tests were added but not run through pytest here.
+- Direct runtime smoke checks that import JAX are blocked because the environment currently has `ml_dtypes==0.4.1`, while JAX now requires `>=0.5`.
+- The new val-loss path still needs a real clean-desktop training run to confirm the split manifest, train-only stats, and val-only loader behave correctly on actual data.
 
 Immediate next step:
 
-- Run a short debug training job for `acot_challenge_generalist_lora_all`, then extract one adapter and smoke-test `scripts/server_routed.sh` against it.
+- Run `scripts/generate_episode_split.py` for `acot_challenge_generalist_lora_clean_desktop`, recompute norm stats with `--split train`, then launch a short debug training run and confirm validation loss logs on the val split.
 
 Git note:
 

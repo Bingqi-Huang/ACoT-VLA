@@ -1,8 +1,8 @@
 
-import torch
 import random
-from tqdm import tqdm
+
 import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
+import torch
 
 def get_base_dataset(ds):
     if hasattr(ds, "_dataset"):
@@ -32,14 +32,15 @@ def sample_subtask(dataset):
         instruction_segment = inner_ds.meta.info.get('instruction_segments', {})
         episode_data_index = inner_ds.episode_data_index
         num_episodes = len(episode_data_index['from'])
+        selected_episode_ids = inner_ds.episodes if inner_ds.episodes is not None else list(range(num_episodes))
         
-        for ep_idx in range(num_episodes):
-            local_episode_start = episode_data_index['from'][ep_idx].item()
+        for local_ep_idx, episode_id in enumerate(selected_episode_ids):
+            local_episode_start = episode_data_index['from'][local_ep_idx].item()
             
-            if str(ep_idx) not in instruction_segment:
+            if str(episode_id) not in instruction_segment:
                 continue
 
-            tasks = instruction_segment[str(ep_idx)]
+            tasks = instruction_segment[str(episode_id)]
             for subtask in tasks:
                 local_start = subtask["start_frame_index"] + local_episode_start
                 local_end = subtask["success_frame_index"] + local_episode_start
@@ -57,7 +58,7 @@ def sample_subtask(dataset):
                 valid_intervals.append((global_start, global_end))
         
         current_global_offset += len(sub_ds)
-        total_episodes_processed += num_episodes
+        total_episodes_processed += len(selected_episode_ids)
 
     print(f"Total {len(valid_intervals)} valid intervals from {total_episodes_processed} episodes.")
     return valid_intervals
@@ -67,9 +68,9 @@ class FrameSampler(torch.utils.data.Sampler):
     """
     Custom sampler that only samples data indices falling within specified intervals
     """
-    def __init__(self, dataset, sampler_type):
+    def __init__(self, dataset, sampler_type, *, shuffle=True, seed=0):
         valid_intervals = self.parse_dataset(dataset, sampler_type)
-        self.sample_frames(valid_intervals, len(dataset))
+        self.sample_frames(valid_intervals, len(dataset), shuffle=shuffle, seed=seed)
 
     def parse_dataset(self, dataset, sampler_type):
         """
@@ -81,7 +82,7 @@ class FrameSampler(torch.utils.data.Sampler):
         else:
             raise ValueError(f"Invalid sampler type: {sampler_type}")
 
-    def sample_frames(self, intervals, dataset_size):
+    def sample_frames(self, intervals, dataset_size, *, shuffle, seed):
         """
         Args:
             intervals: List of (start_index, end_index) tuples
@@ -104,8 +105,8 @@ class FrameSampler(torch.utils.data.Sampler):
         self.valid_indices = sorted(list(set(self.valid_indices)))
         print(f"Total {len(self.valid_indices)} valid indices,", 'original:', dataset_size)
 
-        import random
-        random.shuffle(self.valid_indices)
+        if shuffle:
+            random.Random(seed).shuffle(self.valid_indices)
     
     def __iter__(self):
         return iter(self.valid_indices)

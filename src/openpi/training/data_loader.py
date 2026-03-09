@@ -1,6 +1,7 @@
 from collections.abc import Iterator, Sequence
 import multiprocessing
 import os
+import pathlib
 import typing
 from typing import Protocol, SupportsIndex, TypeVar
 
@@ -13,6 +14,7 @@ import torch
 import openpi.models.model as _model
 import openpi.training.config as _config
 from openpi.training.droid_rlds_dataset import DroidRldsDataset
+import openpi.training.episode_split as _episode_split
 import openpi.transforms as _transforms
 
 T_co = TypeVar("T_co", covariant=True)
@@ -164,7 +166,11 @@ class FakeDataset(Dataset):
 
 
 def create_torch_dataset(
-    data_config: _config.DataConfig, model_config: _model.BaseModelConfig
+    data_config: _config.DataConfig,
+    model_config: _model.BaseModelConfig,
+    *,
+    split: str = "all",
+    split_base_dir: str | os.PathLike[str] | None = None,
 ) -> Dataset:
     """Create a dataset for training."""
     repo_id = data_config.repo_id
@@ -172,6 +178,17 @@ def create_torch_dataset(
         raise ValueError("Repo ID is not set. Cannot create dataset.")
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
+
+    selected_episodes = None
+    if split != "all" and _episode_split.split_enabled(data_config):
+        if split_base_dir is None:
+            raise ValueError("split_base_dir is required when using episode-level splits.")
+        manifest, manifest_path = _episode_split.get_or_create_manifest(
+            data_config,
+            base_output_dir=pathlib.Path(split_base_dir),
+        )
+        _episode_split.report_split(manifest, split=split, manifest_path=manifest_path)
+        selected_episodes = _episode_split.episodes_for_split(manifest, split)
 
     if model_config.model_type == _model.ModelType.ACOT_VLA_PI0 or model_config.model_type == _model.ModelType.ACOT_VLA_PI05:
 
@@ -189,6 +206,7 @@ def create_torch_dataset(
         ]
         dataset = lerobot_dataset.MultiLeRobotDataset(
             repo_id,
+            episodes=typing.cast(dict[str, list[int]] | None, selected_episodes),
             delta_timestamps={
                 key: [t / dataset_meta.fps for t in range(action_chunk_size)]
                 for dataset_meta in dataset_metas
@@ -212,6 +230,7 @@ def create_torch_dataset(
         dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
         dataset = lerobot_dataset.LeRobotDataset(
             data_config.repo_id,
+            episodes=typing.cast(list[int] | None, selected_episodes),
             delta_timestamps={
                 key: [t / dataset_meta.fps for t in range(action_chunk_size)]
                 for key in data_config.action_sequence_keys
@@ -297,6 +316,7 @@ def transform_iterable_dataset(
 def create_data_loader(
     config: _config.TrainConfig,
     *,
+    split: str = "train",
     sharding: jax.sharding.Sharding | None = None,
     shuffle: bool = False,
     num_batches: int | None = None,
@@ -310,6 +330,7 @@ def create_data_loader(
             data_config,
             action_horizon=config.model.action_horizon,
             batch_size=config.batch_size,
+            split=split,
             sharding=sharding,
             shuffle=shuffle,
             num_batches=num_batches,
@@ -320,6 +341,8 @@ def create_data_loader(
         model_config=config.model,
         action_horizon=config.model.action_horizon,
         batch_size=config.batch_size,
+        split=split,
+        split_base_dir=config.assets_dirs / "episode_splits",
         sharding=sharding,
         shuffle=shuffle,
         num_batches=num_batches,
@@ -335,6 +358,8 @@ def create_torch_data_loader(
     action_horizon: int,
     batch_size: int,
     *,
+    split: str = "train",
+    split_base_dir: str | os.PathLike[str] | None = None,
     sharding: jax.sharding.Sharding | None = None,
     skip_norm_stats: bool = False,
     shuffle: bool = False,
@@ -359,13 +384,18 @@ def create_torch_data_loader(
             execute in the main process.
         seed: The seed to use for shuffling the data.
     """
-    dataset = create_torch_dataset(data_config, model_config)
+    dataset = create_torch_dataset(
+        data_config,
+        model_config,
+        split=split,
+        split_base_dir=split_base_dir,
+    )
     dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
 
     sampler = None
     if data_config.dataloader_sampler != '':
         from openpi.training.sampler import FrameSampler
-        sampler = FrameSampler(dataset, data_config.dataloader_sampler)
+        sampler = FrameSampler(dataset, data_config.dataloader_sampler, shuffle=shuffle, seed=seed)
         shuffle = False
 
     dataset = SafeDataset(dataset)
@@ -391,6 +421,7 @@ def create_rlds_data_loader(
     action_horizon: int,
     batch_size: int,
     *,
+    split: str = "train",
     sharding: jax.sharding.Sharding | None = None,
     skip_norm_stats: bool = False,
     shuffle: bool = False,
@@ -404,6 +435,7 @@ def create_rlds_data_loader(
         data_config: The data configuration.
         action_horizon: The action horizon.
         batch_size: The batch size.
+        split: Dataset split to load. RLDS datasets currently ignore this value.
         sharding: The sharding to use for the data loader. If None, the data loader will
             use a single device sharding.
         skip_norm_stats: Whether to skip data normalization.
@@ -412,6 +444,7 @@ def create_rlds_data_loader(
             number of batches in the dataset, the data loader will loop over the dataset.
             If not provided, will iterate over the dataset indefinitely.
     """
+    del split
     dataset = create_rlds_dataset(data_config, action_horizon, batch_size, shuffle=shuffle)
     dataset = transform_iterable_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats, is_batched=True)
 

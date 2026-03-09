@@ -269,6 +269,33 @@ def apply_grads(
     }
     return new_state, info
 
+
+def _eval_params(state: training_utils.TrainState) -> at.Params:
+    return state.ema_params if state.ema_params is not None else state.params
+
+
+@at.typecheck
+def eval_step(
+    config: _config.TrainConfig,
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    batch: tuple[_model.Observation, _model.Actions],
+) -> dict[str, at.Array]:
+    model = nnx.merge(state.model_def, _eval_params(state))
+    model.eval()
+
+    @at.typecheck
+    def loss_fn(
+        model: _model.BaseModel, eval_rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions
+    ):
+        chunked_loss = model.compute_loss(eval_rng, observation, actions, train=False)
+        return jnp.mean(chunked_loss)
+
+    eval_rng = jax.random.fold_in(rng, state.step)
+    observation, actions = batch
+    loss = loss_fn(model, eval_rng, observation, actions)
+    return {"val_loss": loss}
+
 @at.typecheck
 def acot_train_step(
     config: _config.TrainConfig,
@@ -357,6 +384,32 @@ def acot_compute_grads(
     return grads, loss
 
 
+@at.typecheck
+def acot_eval_step(
+    config: _config.TrainConfig,
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    batch: tuple[_model.Observation, _model.Actions, _model.CoarseActions],
+) -> dict[str, at.Array]:
+    model = nnx.merge(state.model_def, _eval_params(state))
+    model.eval()
+
+    @at.typecheck
+    def loss_fn(
+        model: _model.BaseModel,
+        eval_rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        actions: _model.Actions,
+        coarse_actions: _model.CoarseActions,
+    ):
+        return model.compute_loss(eval_rng, observation, actions, coarse_actions, train=False)
+
+    eval_rng = jax.random.fold_in(rng, state.step)
+    observation, actions, coarse_actions = batch
+    loss = loss_fn(model, eval_rng, observation, actions, coarse_actions)
+    return {"val_loss": loss}
+
+
 def main(config: _config.TrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
@@ -385,12 +438,27 @@ def main(config: _config.TrainConfig):
 
     data_loader = _data_loader.create_data_loader(
         config,
+        split="train",
         sharding=data_sharding,
         shuffle=True,
     )
     data_iter = iter(data_loader)
     batch = next(data_iter)
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
+
+    val_loader = None
+    if config.val_interval is not None:
+        if data_loader.data_config().episode_split is None:
+            logging.warning("Validation requested but no episode split is configured; skipping validation.")
+        else:
+            val_loader = _data_loader.create_data_loader(
+                config,
+                split="val",
+                sharding=data_sharding,
+                shuffle=False,
+                num_batches=config.val_num_batches,
+            )
+            logging.info("Initialized validation loader with %d batches per evaluation.", config.val_num_batches)
 
     # Log images from first batch to sanity check.
     images_to_log = [
@@ -415,11 +483,21 @@ def main(config: _config.TrainConfig):
             in_shardings=(replicated_sharding, train_state_sharding, data_sharding, replicated_sharding),
             out_shardings=(trainable_params_sharding, replicated_sharding),
         )
+        peval_step = jax.jit(
+            functools.partial(acot_eval_step, config),
+            in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+            out_shardings=replicated_sharding,
+        )
     else:
         pcompute_grads = jax.jit(
             functools.partial(compute_grads, config),
             in_shardings=(replicated_sharding, train_state_sharding, data_sharding, replicated_sharding),
             out_shardings=(trainable_params_sharding, replicated_sharding),
+        )
+        peval_step = jax.jit(
+            functools.partial(eval_step, config),
+            in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+            out_shardings=replicated_sharding,
         )
     papply_grads = jax.jit(
         functools.partial(apply_grads, config),
@@ -464,6 +542,16 @@ def main(config: _config.TrainConfig):
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
             infos = []
+
+        if val_loader is not None and (step % config.val_interval == 0 or step == config.num_train_steps - 1):
+            val_infos = []
+            with sharding.set_mesh(mesh):
+                for val_batch in val_loader:
+                    val_infos.append(peval_step(train_rng, train_state, val_batch))
+            reduced_val_info = jax.device_get(jax.tree.map(jnp.mean, common_utils.stack_forest(val_infos)))
+            val_info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_val_info.items())
+            pbar.write(f"Validation {step}: {val_info_str}")
+            wandb.log(reduced_val_info, step=step)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
             _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)

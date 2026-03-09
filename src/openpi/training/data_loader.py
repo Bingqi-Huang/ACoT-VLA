@@ -504,7 +504,9 @@ class TorchDataLoader:
 
         self._sharding = sharding
         self._num_batches = num_batches
+        self._local_batch_size = local_batch_size
         self._last_host_batch = None
+        self._partial_batch_warnings = 0
 
         mp_context = None
         if num_workers > 0:
@@ -547,6 +549,15 @@ class TorchDataLoader:
                     break  # We've exhausted the dataset. Create a new iterator and start over.
                 if batch is None:
                     continue
+                actual_batch_size = _get_batch_size(batch)
+                if actual_batch_size is None or actual_batch_size != self._local_batch_size:
+                    if self._partial_batch_warnings < 5:
+                        print(
+                            "[Data Load Warning] Skipping incomplete batch with "
+                            f"size {actual_batch_size}; expected {self._local_batch_size}."
+                        )
+                        self._partial_batch_warnings += 1
+                    continue
                 num_items += 1
                 self._last_host_batch = batch
                 yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
@@ -577,6 +588,14 @@ def _collate_fn(items):
             raise e
 
     return jax.tree.map(debug_stack, *filter_items)
+
+
+def _get_batch_size(batch) -> int | None:
+    for leaf in jax.tree.leaves(batch):
+        shape = getattr(leaf, "shape", None)
+        if shape:
+            return int(shape[0])
+    return None
 
 
 def _worker_init_fn(worker_id: int) -> None:

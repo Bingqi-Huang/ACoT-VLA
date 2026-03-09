@@ -76,6 +76,7 @@ What changed:
 - Fixed a second offline eval issue in `scripts/eval_offline.py` by treating `train=False` as a static kwarg when JIT-compiling `compute_loss_per_example`; this addresses the `TracerBoolConversionError` triggered by `if train:` inside `preprocess_observation()`.
 - Hardened `scripts/compute_norm_stats.py` against bad samples by wrapping the transformed dataset in `SafeDataset`, respecting the computed shuffle mode, and raising a clearer error only if no usable statistics were accumulated.
 - Updated `src/openpi/training/data_loader.py` so fully empty collated batches are skipped instead of propagating `None` into JAX array conversion.
+- Further updated `src/openpi/training/data_loader.py` so partially filtered batches are skipped too; this fixes training-time sharding crashes where `SafeDataset` dropped some bad samples and the surviving batch size no longer matched the configured per-process batch size.
 - Added a tqdm progress bar to `scripts/eval_offline.py` so long offline-eval runs show per-checkpoint batch progress.
 
 What was verified:

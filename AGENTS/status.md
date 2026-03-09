@@ -90,6 +90,7 @@ Last updated: 2026-03-09
 - Offline eval now also marks the `train` kwarg as static when JIT-compiling `compute_loss_per_example`, fixing the `TracerBoolConversionError` raised inside `preprocess_observation()` during teacher-forced ACOT evaluation.
 - `scripts/compute_norm_stats.py` now uses `SafeDataset` and respects its local shuffle flag, so isolated bad samples no longer crash worker batches or leave norm-stat accumulation empty; empty fully-skipped batches are also ignored by `TorchDataLoader`.
 - `scripts/eval_offline.py` now shows a per-checkpoint tqdm progress bar during validation-batch evaluation.
+- `TorchDataLoader` now skips incomplete post-filter batches as well, preventing multi-device `device_put` failures when `SafeDataset` drops bad samples and the remaining batch size is no longer divisible by the data-parallel mesh size.
 
 ## Known Open Work
 

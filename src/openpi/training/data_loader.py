@@ -216,7 +216,22 @@ class EpisodeSubsetCompatibleLeRobotDataset(Dataset):
         return item
 
     def __getattr__(self, name):
-        return getattr(self._base_dataset, name)
+        if name.startswith("__"):
+            raise AttributeError(name)
+        base_dataset = self.__dict__.get("_base_dataset")
+        if base_dataset is None:
+            raise AttributeError(name)
+        return getattr(base_dataset, name)
+
+    def __getstate__(self):
+        return {
+            "_base_dataset": self._base_dataset,
+            "_episode_id_to_local_idx": self._episode_id_to_local_idx,
+        }
+
+    def __setstate__(self, state):
+        self._base_dataset = state["_base_dataset"]
+        self._episode_id_to_local_idx = state["_episode_id_to_local_idx"]
 
 
 def _make_selected_episode_compatible_dataset(dataset):

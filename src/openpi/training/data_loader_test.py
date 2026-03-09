@@ -152,6 +152,20 @@ def test_episode_subset_compatible_lerobot_dataset_is_pickle_safe(monkeypatch):
     restored[0]
 
     assert restored._base_dataset.calls == [(0, 1)]
+    assert restored.repo_id == "fake_repo"
+
+
+def test_episode_subset_compatible_lerobot_dataset_uninitialized_getattr_is_safe():
+    wrapped = _data_loader.EpisodeSubsetCompatibleLeRobotDataset.__new__(
+        _data_loader.EpisodeSubsetCompatibleLeRobotDataset
+    )
+
+    try:
+        _ = wrapped.repo_id
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("Expected AttributeError when _base_dataset is not initialized")
 
 
 def test_make_selected_episode_compatible_dataset_recurses_into_multi_dataset(monkeypatch):

@@ -1260,7 +1260,10 @@ class TrainConfig:
 _REASONING2ACTION_DATA_ROOT = os.path.expanduser(
     os.getenv("ACOT_CHALLENGE_DATA_ROOT", "~/Datasets/lerobot/Reasoning2Action-Sim")
 )
-_REASONING2ACTION_ASSETS_DIR = os.path.join(_REASONING2ACTION_DATA_ROOT, "assets")
+_WORKSPACE_ROOT = pathlib.Path(__file__).resolve().parents[3]
+_REASONING2ACTION_ASSETS_DIR = os.path.expanduser(
+    os.getenv("ACOT_CHALLENGE_ASSETS_DIR", str(_WORKSPACE_ROOT / "assets"))
+)
 _REASONING2ACTION_PROMPT_MAP = {
     "Unload workpiece_icra_SIM": ("Pour the workpiece into the box", 0.5),
     "Turn the doorknob": ("Turn the doorknob and push the door", 0.5),
@@ -2164,7 +2167,7 @@ _CONFIGS = [
                 os.path.expanduser("~/Datasets/lerobot/Reasoning2Action-Sim/clean_the_desktop_part_2"),
             ],
             assets=AssetsConfig(
-                assets_dir=os.path.expanduser("~/Datasets/lerobot/Reasoning2Action-Sim/assets"),
+                assets_dir=_REASONING2ACTION_ASSETS_DIR,
                 asset_id="reasoning2action_sim_local",
             ),
             prompt_map_inject_to_training={

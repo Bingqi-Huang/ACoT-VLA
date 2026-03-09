@@ -1,7 +1,8 @@
 import dataclasses
-import types
+import pickle
 
 import jax
+import torch
 
 from openpi.models import pi0
 from openpi.training import config as _config
@@ -86,36 +87,93 @@ def test_with_real_dataset():
 
 
 class _FakeLeRobotDataset:
-    def __init__(self, episodes):
+    class _Meta:
+        def __init__(self):
+            self.video_keys = []
+            self.camera_keys = []
+            self.tasks = {0: "fake_task"}
+
+    def __init__(self, episodes, episode_index=0):
         self.episodes = episodes
         self.repo_id = "fake_repo"
+        self.delta_indices = {"actions": [0]}
+        self.meta = self._Meta()
+        self.image_transforms = None
+        self.hf_dataset = [
+            {
+                "episode_index": torch.tensor(episode_index),
+                "task_index": torch.tensor(0),
+                "timestamp": torch.tensor(0.0),
+            }
+        ]
         self.calls = []
 
     def _get_query_indices(self, idx, ep_idx):
         self.calls.append((idx, ep_idx))
-        return {"query": [idx]}, {"pad": [False]}
+        return {"actions": [idx]}, {"actions_is_pad": torch.BoolTensor([False])}
+
+    def _query_hf_dataset(self, query_indices):
+        return {"actions": torch.zeros((1, 8))}
+
+    def _get_query_timestamps(self, current_ts, query_indices=None):
+        del current_ts, query_indices
+        return {}
+
+    def _query_videos(self, query_timestamps, ep_idx):
+        del query_timestamps, ep_idx
+        return {}
+
+    def __len__(self):
+        return len(self.hf_dataset)
 
 
-def test_patch_lerobot_selected_episode_query_indices_maps_global_to_local(monkeypatch):
+class _FakeMultiDataset:
+    def __init__(self, datasets):
+        self._datasets = datasets
+
+
+def test_episode_subset_compatible_lerobot_dataset_maps_global_to_local(monkeypatch):
     monkeypatch.setattr(_data_loader.lerobot_dataset, "LeRobotDataset", _FakeLeRobotDataset)
-    dataset = _FakeLeRobotDataset([5, 9])
+    dataset = _FakeLeRobotDataset([5, 9], episode_index=9)
+    wrapped = _data_loader.EpisodeSubsetCompatibleLeRobotDataset(dataset)
 
-    _data_loader._patch_lerobot_selected_episode_query_indices(dataset)
-    dataset._get_query_indices(42, 9)
+    item = wrapped[0]
 
-    assert dataset.calls == [(42, 1)]
-    assert dataset._openpi_episode_subset_patch_applied is True
+    assert dataset.calls == [(0, 1)]
+    assert item["task"] == "fake_task"
+    assert item["episode_index"].item() == 9
 
 
-def test_patch_lerobot_selected_episode_query_indices_recurses_into_multi_dataset(monkeypatch):
+def test_episode_subset_compatible_lerobot_dataset_is_pickle_safe(monkeypatch):
     monkeypatch.setattr(_data_loader.lerobot_dataset, "LeRobotDataset", _FakeLeRobotDataset)
-    left = _FakeLeRobotDataset([3, 7])
-    right = _FakeLeRobotDataset([10, 20])
-    dataset = types.SimpleNamespace(_datasets=[left, right])
+    wrapped = _data_loader.EpisodeSubsetCompatibleLeRobotDataset(_FakeLeRobotDataset([3, 7], episode_index=7))
 
-    _data_loader._patch_lerobot_selected_episode_query_indices(dataset)
-    left._get_query_indices(1, 7)
-    right._get_query_indices(2, 20)
+    restored = pickle.loads(pickle.dumps(wrapped))
+    restored[0]
 
-    assert left.calls == [(1, 1)]
-    assert right.calls == [(2, 1)]
+    assert restored._base_dataset.calls == [(0, 1)]
+
+
+def test_make_selected_episode_compatible_dataset_recurses_into_multi_dataset(monkeypatch):
+    monkeypatch.setattr(_data_loader.lerobot_dataset, "LeRobotDataset", _FakeLeRobotDataset)
+    left = _FakeLeRobotDataset([3, 7], episode_index=7)
+    right = _FakeLeRobotDataset([10, 20], episode_index=20)
+    dataset = _FakeMultiDataset([left, right])
+
+    wrapped = _data_loader._make_selected_episode_compatible_dataset(dataset)
+    wrapped._datasets[0][0]
+    wrapped._datasets[1][0]
+
+    assert isinstance(wrapped._datasets[0], _data_loader.EpisodeSubsetCompatibleLeRobotDataset)
+    assert isinstance(wrapped._datasets[1], _data_loader.EpisodeSubsetCompatibleLeRobotDataset)
+    assert left.calls == [(0, 1)]
+    assert right.calls == [(0, 1)]
+
+
+def test_make_selected_episode_compatible_dataset_leaves_contiguous_subset_unchanged(monkeypatch):
+    monkeypatch.setattr(_data_loader.lerobot_dataset, "LeRobotDataset", _FakeLeRobotDataset)
+    dataset = _FakeLeRobotDataset([0, 1], episode_index=1)
+
+    wrapped = _data_loader._make_selected_episode_compatible_dataset(dataset)
+
+    assert wrapped is dataset

@@ -78,7 +78,7 @@ What changed:
 - Updated `src/openpi/training/data_loader.py` so fully empty collated batches are skipped instead of propagating `None` into JAX array conversion.
 - Further updated `src/openpi/training/data_loader.py` so partially filtered batches are skipped too; this fixes training-time sharding crashes where `SafeDataset` dropped some bad samples and the surviving batch size no longer matched the configured per-process batch size.
 - Added a tqdm progress bar to `scripts/eval_offline.py` so long offline-eval runs show per-checkpoint batch progress.
-- Fixed the underlying split-vs-LeRobot incompatibility in `src/openpi/training/data_loader.py`: for selected episode subsets, openpi now patches each `LeRobotDataset` instance so `_get_query_indices()` maps the original global `episode_index` to the dataset-local episode position expected by `episode_data_index`. This preserves original episode ids for prompt logic but stops large numbers of legitimate split samples from being misread as out-of-bounds.
+- Fixed the underlying split-vs-LeRobot incompatibility in `src/openpi/training/data_loader.py`: selected-episode `LeRobotDataset` objects are now wrapped by a top-level compatibility dataset that remaps the original global `episode_index` to the dataset-local episode position expected by `episode_data_index`. This preserves original episode ids for prompt logic, avoids the large number of false out-of-bounds reads on split subsets, and stays pickle-safe for PyTorch `spawn` workers.
 - Added `scripts/run_norm_and_train.py` as a convenience wrapper for unattended runs: it launches `compute_norm_stats.py` first and, only if that succeeds, launches `train.py` with `--overwrite=true` using the same Python environment.
 - Added `scripts/run_norm_and_train.sh` for the same unattended workflow in pure shell. Also updated `scripts/train.sh` to accept and forward extra args to `train.py`, including translating the typo `--overwirte` into `--overwrite=true`.
 
@@ -105,10 +105,11 @@ What is still broken or unknown:
 - The new offline evaluator still needs one real experiment directory run to confirm batch loading, per-task task-name recovery, and JSON/CSV outputs on actual Reasoning2Action checkpoints.
 - The new train logging still needs one real clean-desktop run to confirm task metadata survives as expected and that the additional batch-metric JIT does not add unacceptable overhead.
 - The fixed offline eval path still needs one real rerun on the previously failing clean-desktop checkpoint to confirm metric generation completes end-to-end.
+- The new pickle-safe selected-episode compatibility wrapper still needs one real `scripts/compute_norm_stats.py` rerun with `num_workers > 0` to confirm the previous `patched_get_query_indices` multiprocessing failure is gone on the target environment.
 
 Immediate next step:
 
-- Run `scripts/generate_episode_split.py` for `acot_challenge_generalist_lora_clean_desktop`, recompute norm stats with `--split train`, then launch a short debug training run and confirm validation loss logs on the val split.
+- Re-run `scripts/compute_norm_stats.py` for the target split-enabled config with worker processes enabled and confirm it gets past the earlier `patched_get_query_indices` spawn error; then launch a short debug training run and confirm validation loss logs on the val split.
 - After the debug run produces checkpoints, execute `scripts/eval_offline.py` on the experiment directory and inspect `eval/summary.csv` for checkpoint ranking.
 - Inspect `<checkpoint_dir>/train_metrics.jsonl` from the same debug run and verify that the expected `train/task/*` and `train/action_mae/*` keys appear.
 

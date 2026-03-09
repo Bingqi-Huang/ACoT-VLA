@@ -2,7 +2,6 @@ from collections.abc import Iterator, Sequence
 import multiprocessing
 import os
 import pathlib
-import types
 import typing
 from typing import Protocol, SupportsIndex, TypeVar
 
@@ -170,39 +169,74 @@ class FakeDataset(Dataset):
         return self._num_samples
 
 
-def _patch_lerobot_selected_episode_query_indices(dataset) -> None:
+class EpisodeSubsetCompatibleLeRobotDataset(Dataset):
+    def __init__(self, dataset: lerobot_dataset.LeRobotDataset):
+        self._base_dataset = dataset
+        episodes = getattr(dataset, "episodes", None)
+        if episodes is None:
+            raise ValueError("EpisodeSubsetCompatibleLeRobotDataset requires a dataset with selected episodes.")
+        self._episode_id_to_local_idx = {
+            int(episode_id): local_idx for local_idx, episode_id in enumerate(episodes)
+        }
+
+    def __len__(self) -> int:
+        return len(self._base_dataset)
+
+    def __getitem__(self, idx: SupportsIndex) -> dict:
+        index = idx.__index__()
+        item = self._base_dataset.hf_dataset[index]
+        ep_idx = item["episode_index"].item()
+
+        query_indices = None
+        if self._base_dataset.delta_indices is not None:
+            local_ep_idx = self._episode_id_to_local_idx.get(int(ep_idx))
+            if local_ep_idx is None:
+                raise IndexError(
+                    f"Episode index {ep_idx} not found in selected episodes for dataset {self._base_dataset.repo_id}"
+                )
+            query_indices, padding = self._base_dataset._get_query_indices(index, local_ep_idx)
+            query_result = self._base_dataset._query_hf_dataset(query_indices)
+            item = {**item, **padding}
+            for key, val in query_result.items():
+                item[key] = val
+
+        if len(self._base_dataset.meta.video_keys) > 0:
+            current_ts = item["timestamp"].item()
+            query_timestamps = self._base_dataset._get_query_timestamps(current_ts, query_indices)
+            video_frames = self._base_dataset._query_videos(query_timestamps, ep_idx)
+            item = {**video_frames, **item}
+
+        if self._base_dataset.image_transforms is not None:
+            image_keys = self._base_dataset.meta.camera_keys
+            for cam in image_keys:
+                item[cam] = self._base_dataset.image_transforms(item[cam])
+
+        task_idx = item["task_index"].item()
+        item["task"] = self._base_dataset.meta.tasks[task_idx]
+        return item
+
+    def __getattr__(self, name):
+        return getattr(self._base_dataset, name)
+
+
+def _make_selected_episode_compatible_dataset(dataset):
     sub_datasets = getattr(dataset, "_datasets", None)
     if sub_datasets is not None:
-        for sub_dataset in sub_datasets:
-            _patch_lerobot_selected_episode_query_indices(sub_dataset)
-        return
+        dataset._datasets = [_make_selected_episode_compatible_dataset(sub_dataset) for sub_dataset in sub_datasets]
+        return dataset
 
     if not isinstance(dataset, lerobot_dataset.LeRobotDataset):
-        return
-    if getattr(dataset, "_openpi_episode_subset_patch_applied", False):
-        return
+        return dataset
 
     episodes = getattr(dataset, "episodes", None)
     if episodes is None:
-        return
+        return dataset
 
     selected_episode_ids = [int(ep_id) for ep_id in episodes]
     if selected_episode_ids == list(range(len(selected_episode_ids))):
-        return
+        return dataset
 
-    episode_id_to_local_idx = {episode_id: local_idx for local_idx, episode_id in enumerate(selected_episode_ids)}
-    original_get_query_indices = dataset._get_query_indices
-
-    def patched_get_query_indices(self, idx: int, ep_idx: int):
-        local_ep_idx = episode_id_to_local_idx.get(int(ep_idx))
-        if local_ep_idx is None:
-            raise IndexError(
-                f"Episode index {ep_idx} not found in selected episodes for dataset {getattr(self, 'repo_id', '<unknown>')}"
-            )
-        return original_get_query_indices(idx, local_ep_idx)
-
-    dataset._get_query_indices = types.MethodType(patched_get_query_indices, dataset)
-    dataset._openpi_episode_subset_patch_applied = True
+    return EpisodeSubsetCompatibleLeRobotDataset(dataset)
 
 
 def create_torch_dataset(
@@ -253,7 +287,7 @@ def create_torch_dataset(
                 for key in data_config.action_sequence_keys
             },
         )
-        _patch_lerobot_selected_episode_query_indices(dataset)
+        dataset = _make_selected_episode_compatible_dataset(dataset)
         if data_config.prompt_from_task:
             for n, d in enumerate(dataset._datasets):
                 dataset._datasets[n] = TransformedDataset(
@@ -277,7 +311,7 @@ def create_torch_dataset(
                 for key in data_config.action_sequence_keys
             },
         )
-        _patch_lerobot_selected_episode_query_indices(dataset)
+        dataset = _make_selected_episode_compatible_dataset(dataset)
 
         if data_config.prompt_from_task:
             dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])

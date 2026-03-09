@@ -93,6 +93,7 @@ Last updated: 2026-03-09
 - `TorchDataLoader` now skips incomplete post-filter batches as well, preventing multi-device `device_put` failures when `SafeDataset` drops bad samples and the remaining batch size is no longer divisible by the data-parallel mesh size.
 - Root cause identified for the large number of post-split “bad samples”: the current LeRobot version uses global `episode_index` values to index a local `episode_data_index` array after subsetting episodes, which breaks on non-contiguous episode subsets. `src/openpi/training/data_loader.py` now patches selected-episode LeRobot datasets so query/padding logic remaps global episode ids to local subset positions while preserving the original `episode_index` in returned samples.
 - Added `scripts/run_norm_and_train.py` to sequentially run `compute_norm_stats.py` and then `train.py --overwrite=true` in one command, intended for unattended overnight finetuning starts after the split/data-loader fixes.
+- Added a shell-first unattended runner `scripts/run_norm_and_train.sh`; `scripts/train.sh` now forwards extra CLI args to `train.py` and normalizes the common typo `--overwirte` to `--overwrite=true`.
 
 ## Known Open Work
 

@@ -7,6 +7,16 @@ export CUDA_VISIBLE_DEVICES=0,1,2
 
 CONFIG_NAME=${1}
 EXP_NAME=${2}
+shift 2
+
+TRAIN_ARGS=()
+for arg in "$@"; do
+    if [[ "${arg}" == "--overwirte" ]]; then
+        TRAIN_ARGS+=("--overwrite=true")
+    else
+        TRAIN_ARGS+=("${arg}")
+    fi
+done
 
 LOG_DIR=./logs
 LOG_FILE="${LOG_DIR}/${CONFIG_NAME}_${EXP_NAME}_$(date +%Y%m%d_%H%M%S).log"
@@ -14,4 +24,4 @@ LOG_FILE="${LOG_DIR}/${CONFIG_NAME}_${EXP_NAME}_$(date +%Y%m%d_%H%M%S).log"
 mkdir -p "${LOG_DIR}"
 
 env | sort | tee "${LOG_FILE}"
-uv run python scripts/train.py "${CONFIG_NAME}" --exp-name="${EXP_NAME}" 2>&1 | tee -a "${LOG_FILE}"
+uv run python scripts/train.py "${CONFIG_NAME}" --exp-name="${EXP_NAME}" "${TRAIN_ARGS[@]}" 2>&1 | tee -a "${LOG_FILE}"

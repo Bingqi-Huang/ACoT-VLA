@@ -80,6 +80,7 @@ What changed:
 - Added a tqdm progress bar to `scripts/eval_offline.py` so long offline-eval runs show per-checkpoint batch progress.
 - Fixed the underlying split-vs-LeRobot incompatibility in `src/openpi/training/data_loader.py`: for selected episode subsets, openpi now patches each `LeRobotDataset` instance so `_get_query_indices()` maps the original global `episode_index` to the dataset-local episode position expected by `episode_data_index`. This preserves original episode ids for prompt logic but stops large numbers of legitimate split samples from being misread as out-of-bounds.
 - Added `scripts/run_norm_and_train.py` as a convenience wrapper for unattended runs: it launches `compute_norm_stats.py` first and, only if that succeeds, launches `train.py` with `--overwrite=true` using the same Python environment.
+- Added `scripts/run_norm_and_train.sh` for the same unattended workflow in pure shell. Also updated `scripts/train.sh` to accept and forward extra args to `train.py`, including translating the typo `--overwirte` into `--overwrite=true`.
 
 What was verified:
 

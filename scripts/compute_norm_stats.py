@@ -49,19 +49,19 @@ def create_torch_dataloader(
             RemoveStrings(),
         ],
     )
-    # dataset = _data_loader.SafeDataset(dataset)
+    dataset = _data_loader.SafeDataset(dataset)
     if max_frames is not None and max_frames < len(dataset):
         num_batches = max_frames // batch_size
         shuffle = True
     else:
         num_batches = len(dataset) // batch_size
         shuffle = False
-    
+
     data_loader = _data_loader.TorchDataLoader(
         dataset,
         local_batch_size=batch_size,
         num_workers=8,
-        shuffle=True,
+        shuffle=shuffle,
         num_batches=num_batches,
     )
     return data_loader, num_batches
@@ -128,7 +128,7 @@ def main(
     stats = {key: normalize.RunningStats() for key in keys}
 
     sample_ratio = 0.1
-    max_batches = int(num_batches * sample_ratio)
+    max_batches = max(1, int(num_batches * sample_ratio))
 
     data_iter = iter(data_loader)
     pbar = tqdm.tqdm(total=max_batches, desc="Computing stats")
@@ -151,7 +151,18 @@ def main(
 
     pbar.close()
 
-    norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
+    if valid_batches == 0:
+        raise RuntimeError("No valid batches were processed while computing norm stats.")
+
+    norm_stats = {}
+    for key, key_stats in stats.items():
+        try:
+            norm_stats[key] = key_stats.get_statistics()
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Failed to compute normalization stats for `{key}` after {valid_batches} valid batches. "
+                "This usually means too many samples were skipped during data loading."
+            ) from exc
 
     output_path = pathlib.Path(output_dir) if output_dir is not None else _default_output_dir(config)
     print(f"Writing stats to: {output_path}")

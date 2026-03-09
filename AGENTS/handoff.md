@@ -74,6 +74,9 @@ What changed:
 - Extended `src/openpi/training/data_loader.py` so the training loop can recover raw batch metadata (`task`, `episode_index`, `frame_index`) for logging without changing the model input path.
 - Fixed offline eval for ACOT data configs in `src/openpi/training/offline_eval.py` by preserving dynamic attrs like `joint_action_shifts` when swapping in checkpoint norm stats; this addresses the clean-desktop eval crash where `create_torch_dataset()` received a plain `DataConfig`.
 - Fixed a second offline eval issue in `scripts/eval_offline.py` by treating `train=False` as a static kwarg when JIT-compiling `compute_loss_per_example`; this addresses the `TracerBoolConversionError` triggered by `if train:` inside `preprocess_observation()`.
+- Hardened `scripts/compute_norm_stats.py` against bad samples by wrapping the transformed dataset in `SafeDataset`, respecting the computed shuffle mode, and raising a clearer error only if no usable statistics were accumulated.
+- Updated `src/openpi/training/data_loader.py` so fully empty collated batches are skipped instead of propagating `None` into JAX array conversion.
+- Added a tqdm progress bar to `scripts/eval_offline.py` so long offline-eval runs show per-checkpoint batch progress.
 
 What was verified:
 

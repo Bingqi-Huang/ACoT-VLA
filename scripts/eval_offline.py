@@ -5,6 +5,7 @@ from typing import Any
 
 import jax
 import numpy as np
+import tqdm.auto as tqdm
 import tyro
 
 from openpi.models import model as _model
@@ -56,59 +57,74 @@ def _evaluate_checkpoint(
 
     accumulator: _offline_eval.OfflineEvalAccumulator | None = None
     base_rng = jax.random.key(seed)
+    total_batches = None
+    try:
+        total_batches = len(val_loader)
+    except TypeError:
+        pass
+    if max_batches is not None and total_batches is not None:
+        total_batches = min(total_batches, max_batches)
+    progress = tqdm.tqdm(
+        total=total_batches,
+        desc=f"Offline eval {checkpoint_dir.name}",
+        dynamic_ncols=True,
+    )
 
-    for batch_index, batch in enumerate(val_loader):
-        if max_batches is not None and batch_index >= max_batches:
-            break
+    try:
+        for batch_index, batch in enumerate(val_loader):
+            if max_batches is not None and batch_index >= max_batches:
+                break
 
-        batch_size_current = np.asarray(batch["actions"]).shape[0]
-        task_names = np.asarray(batch.get("task", np.full(batch_size_current, "unknown")))
-        jax_batch = _offline_eval.to_jax_batch(batch)
-        observation = _model.Observation.from_dict(jax_batch)
-        actions = jax_batch["actions"]
-        eval_rng = jax.random.fold_in(base_rng, batch_index)
+            batch_size_current = np.asarray(batch["actions"]).shape[0]
+            task_names = np.asarray(batch.get("task", np.full(batch_size_current, "unknown")))
+            jax_batch = _offline_eval.to_jax_batch(batch)
+            observation = _model.Observation.from_dict(jax_batch)
+            actions = jax_batch["actions"]
+            eval_rng = jax.random.fold_in(base_rng, batch_index)
 
-        if "coarse_actions" in jax_batch:
-            coarse_actions = jax_batch["coarse_actions"]
-            loss_per_example = loss_fn(eval_rng, observation, actions, coarse_actions, train=False)
-            predicted_actions = predict_fn(
-                observation,
-                actions,
-                coarse_actions,
-                time=teacher_force_time,
+            if "coarse_actions" in jax_batch:
+                coarse_actions = jax_batch["coarse_actions"]
+                loss_per_example = loss_fn(eval_rng, observation, actions, coarse_actions, train=False)
+                predicted_actions = predict_fn(
+                    observation,
+                    actions,
+                    coarse_actions,
+                    time=teacher_force_time,
+                )
+            else:
+                loss_per_example = loss_fn(eval_rng, observation, actions, train=False)
+                predicted_actions = predict_fn(
+                    observation,
+                    actions,
+                    time=teacher_force_time,
+                )
+
+            state = np.asarray(jax.device_get(jax_batch["state"]))
+            predicted_actions_np = np.asarray(jax.device_get(predicted_actions))
+            target_actions_np = np.asarray(jax.device_get(actions))
+            loss_per_example_np = np.asarray(jax.device_get(loss_per_example))
+
+            raw_predicted_actions = output_transform(
+                {"state": state.copy(), "actions": predicted_actions_np.copy()}
+            )["actions"]
+            raw_target_actions = output_transform(
+                {"state": state.copy(), "actions": target_actions_np.copy()}
+            )["actions"]
+
+            if accumulator is None:
+                accumulator = _offline_eval.OfflineEvalAccumulator(
+                    action_dim=raw_target_actions.shape[-1],
+                    horizon=raw_target_actions.shape[-2],
+                )
+            accumulator.update(
+                loss_per_example=loss_per_example_np,
+                predicted_actions=np.asarray(raw_predicted_actions),
+                target_actions=np.asarray(raw_target_actions),
+                task_names=task_names,
             )
-        else:
-            loss_per_example = loss_fn(eval_rng, observation, actions, train=False)
-            predicted_actions = predict_fn(
-                observation,
-                actions,
-                time=teacher_force_time,
-            )
-
-        state = np.asarray(jax.device_get(jax_batch["state"]))
-        predicted_actions_np = np.asarray(jax.device_get(predicted_actions))
-        target_actions_np = np.asarray(jax.device_get(actions))
-        loss_per_example_np = np.asarray(jax.device_get(loss_per_example))
-
-        raw_predicted_actions = output_transform(
-            {"state": state.copy(), "actions": predicted_actions_np.copy()}
-        )["actions"]
-        raw_target_actions = output_transform(
-            {"state": state.copy(), "actions": target_actions_np.copy()}
-        )["actions"]
-
-        if accumulator is None:
-            accumulator = _offline_eval.OfflineEvalAccumulator(
-                action_dim=raw_target_actions.shape[-1],
-                horizon=raw_target_actions.shape[-2],
-            )
-        accumulator.update(
-            loss_per_example=loss_per_example_np,
-            predicted_actions=np.asarray(raw_predicted_actions),
-            target_actions=np.asarray(raw_target_actions),
-            task_names=task_names,
-        )
-
+            progress.update(1)
+    finally:
+        progress.close()
     if accumulator is None:
         raise ValueError(f"No validation batches were produced for checkpoint {checkpoint_dir}")
 

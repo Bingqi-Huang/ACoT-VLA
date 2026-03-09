@@ -88,6 +88,8 @@ Last updated: 2026-03-09
 - Finetuning runs now emit richer training diagnostics during `scripts/train.py`, including train loss, per-task train loss when task metadata is present, learning rate, grad norm, param norm, throughput, wall-clock time, checkpoint events, and batch-level action MAE metrics to both W&B and `train_metrics.jsonl` inside the experiment checkpoint directory; the W&B metric families are now explicitly defined so these series show up with stable step axes.
 - Offline eval for ACOT checkpoints now preserves dynamic data-config attributes such as `joint_action_shifts` when injecting checkpoint norm stats, fixing the `AttributeError: 'DataConfig' object has no attribute 'joint_action_shifts'` crash seen on clean-desktop checkpoint evaluation.
 - Offline eval now also marks the `train` kwarg as static when JIT-compiling `compute_loss_per_example`, fixing the `TracerBoolConversionError` raised inside `preprocess_observation()` during teacher-forced ACOT evaluation.
+- `scripts/compute_norm_stats.py` now uses `SafeDataset` and respects its local shuffle flag, so isolated bad samples no longer crash worker batches or leave norm-stat accumulation empty; empty fully-skipped batches are also ignored by `TorchDataLoader`.
+- `scripts/eval_offline.py` now shows a per-checkpoint tqdm progress bar during validation-batch evaluation.
 
 ## Known Open Work
 

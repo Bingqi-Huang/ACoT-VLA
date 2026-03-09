@@ -545,6 +545,8 @@ class TorchDataLoader:
                     batch = next(data_iter)
                 except StopIteration:
                     break  # We've exhausted the dataset. Create a new iterator and start over.
+                if batch is None:
+                    continue
                 num_items += 1
                 self._last_host_batch = batch
                 yield jax.tree.map(lambda x: jax.make_array_from_process_local_data(self._sharding, x), batch)
@@ -555,6 +557,8 @@ def _collate_fn(items):
     # Make sure to convert to numpy arrays before stacking since some of the incoming elements
     # may be JAX arrays.
     filter_items = [x for x in items if x is not None]
+    if not filter_items:
+        return None
     # return jax.tree.map(lambda *x: np.stack(np.asarray(x), axis=0), *filter_items)
 
     def debug_stack(*args):

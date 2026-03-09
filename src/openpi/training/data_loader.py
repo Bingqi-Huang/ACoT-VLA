@@ -2,6 +2,7 @@ from collections.abc import Iterator, Sequence
 import multiprocessing
 import os
 import pathlib
+import types
 import typing
 from typing import Protocol, SupportsIndex, TypeVar
 
@@ -169,6 +170,41 @@ class FakeDataset(Dataset):
         return self._num_samples
 
 
+def _patch_lerobot_selected_episode_query_indices(dataset) -> None:
+    sub_datasets = getattr(dataset, "_datasets", None)
+    if sub_datasets is not None:
+        for sub_dataset in sub_datasets:
+            _patch_lerobot_selected_episode_query_indices(sub_dataset)
+        return
+
+    if not isinstance(dataset, lerobot_dataset.LeRobotDataset):
+        return
+    if getattr(dataset, "_openpi_episode_subset_patch_applied", False):
+        return
+
+    episodes = getattr(dataset, "episodes", None)
+    if episodes is None:
+        return
+
+    selected_episode_ids = [int(ep_id) for ep_id in episodes]
+    if selected_episode_ids == list(range(len(selected_episode_ids))):
+        return
+
+    episode_id_to_local_idx = {episode_id: local_idx for local_idx, episode_id in enumerate(selected_episode_ids)}
+    original_get_query_indices = dataset._get_query_indices
+
+    def patched_get_query_indices(self, idx: int, ep_idx: int):
+        local_ep_idx = episode_id_to_local_idx.get(int(ep_idx))
+        if local_ep_idx is None:
+            raise IndexError(
+                f"Episode index {ep_idx} not found in selected episodes for dataset {getattr(self, 'repo_id', '<unknown>')}"
+            )
+        return original_get_query_indices(idx, local_ep_idx)
+
+    dataset._get_query_indices = types.MethodType(patched_get_query_indices, dataset)
+    dataset._openpi_episode_subset_patch_applied = True
+
+
 def create_torch_dataset(
     data_config: _config.DataConfig,
     model_config: _model.BaseModelConfig,
@@ -217,6 +253,7 @@ def create_torch_dataset(
                 for key in data_config.action_sequence_keys
             },
         )
+        _patch_lerobot_selected_episode_query_indices(dataset)
         if data_config.prompt_from_task:
             for n, d in enumerate(dataset._datasets):
                 dataset._datasets[n] = TransformedDataset(
@@ -240,6 +277,7 @@ def create_torch_dataset(
                 for key in data_config.action_sequence_keys
             },
         )
+        _patch_lerobot_selected_episode_query_indices(dataset)
 
         if data_config.prompt_from_task:
             dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])

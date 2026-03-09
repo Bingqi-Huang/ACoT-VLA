@@ -91,6 +91,7 @@ Last updated: 2026-03-09
 - `scripts/compute_norm_stats.py` now uses `SafeDataset` and respects its local shuffle flag, so isolated bad samples no longer crash worker batches or leave norm-stat accumulation empty; empty fully-skipped batches are also ignored by `TorchDataLoader`.
 - `scripts/eval_offline.py` now shows a per-checkpoint tqdm progress bar during validation-batch evaluation.
 - `TorchDataLoader` now skips incomplete post-filter batches as well, preventing multi-device `device_put` failures when `SafeDataset` drops bad samples and the remaining batch size is no longer divisible by the data-parallel mesh size.
+- Root cause identified for the large number of post-split “bad samples”: the current LeRobot version uses global `episode_index` values to index a local `episode_data_index` array after subsetting episodes, which breaks on non-contiguous episode subsets. `src/openpi/training/data_loader.py` now patches selected-episode LeRobot datasets so query/padding logic remaps global episode ids to local subset positions while preserving the original `episode_index` in returned samples.
 
 ## Known Open Work
 

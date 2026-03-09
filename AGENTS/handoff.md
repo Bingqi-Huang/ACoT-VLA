@@ -78,6 +78,7 @@ What changed:
 - Updated `src/openpi/training/data_loader.py` so fully empty collated batches are skipped instead of propagating `None` into JAX array conversion.
 - Further updated `src/openpi/training/data_loader.py` so partially filtered batches are skipped too; this fixes training-time sharding crashes where `SafeDataset` dropped some bad samples and the surviving batch size no longer matched the configured per-process batch size.
 - Added a tqdm progress bar to `scripts/eval_offline.py` so long offline-eval runs show per-checkpoint batch progress.
+- Fixed the underlying split-vs-LeRobot incompatibility in `src/openpi/training/data_loader.py`: for selected episode subsets, openpi now patches each `LeRobotDataset` instance so `_get_query_indices()` maps the original global `episode_index` to the dataset-local episode position expected by `episode_data_index`. This preserves original episode ids for prompt logic but stops large numbers of legitimate split samples from being misread as out-of-bounds.
 
 What was verified:
 

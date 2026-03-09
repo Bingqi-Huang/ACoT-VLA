@@ -85,7 +85,7 @@ Last updated: 2026-03-09
 - Architecture changes are allowed only if the final serving interface remains compliant.
 - For meaningful finetuning validation, train/val separation now happens strictly at the episode level for LeRobot datasets when `episode_split` is configured.
 - Offline checkpoint selection can now be done on the val episode split without simulation rollout, using per-checkpoint JSON metrics and a summary CSV.
-- Finetuning runs now emit richer training diagnostics during `scripts/train.py`, including train loss, per-task train loss when task metadata is present, learning rate, grad norm, param norm, throughput, wall-clock time, checkpoint events, and batch-level action MAE metrics to both W&B and `train_metrics.jsonl` inside the experiment checkpoint directory.
+- Finetuning runs now emit richer training diagnostics during `scripts/train.py`, including train loss, per-task train loss when task metadata is present, learning rate, grad norm, param norm, throughput, wall-clock time, checkpoint events, and batch-level action MAE metrics to both W&B and `train_metrics.jsonl` inside the experiment checkpoint directory; the W&B metric families are now explicitly defined so these series show up with stable step axes.
 
 ## Known Open Work
 

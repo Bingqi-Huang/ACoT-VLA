@@ -74,6 +74,19 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
         wandb.run.log_code(epath.Path(__file__).parent.parent)
 
 
+def configure_wandb_metrics() -> None:
+    wandb.define_metric("train/step")
+    wandb.define_metric("train/train_state_step")
+    wandb.define_metric("train/*", step_metric="train/step")
+    wandb.define_metric("loss", step_metric="train/step")
+    wandb.define_metric("grad_norm", step_metric="train/step")
+    wandb.define_metric("param_norm", step_metric="train/step")
+    wandb.define_metric("val/loss", step_metric="train/step")
+    wandb.define_metric("val_loss", step_metric="train/step")
+    wandb.define_metric("checkpoint/step")
+    wandb.define_metric("checkpoint/*", step_metric="checkpoint/step")
+
+
 def build_action_output_transform(data_config: _config.DataConfig) -> _transforms.DataTransformFn:
     return _transforms.compose(
         [
@@ -602,6 +615,7 @@ def main(config: _config.TrainConfig):
         resume=config.resume,
     )
     init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
+    configure_wandb_metrics()
 
     data_loader = _data_loader.create_data_loader(
         config,

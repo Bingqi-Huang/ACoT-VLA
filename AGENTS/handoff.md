@@ -70,6 +70,7 @@ What changed:
   - logs per-task train loss when raw batch `task` metadata is available
   - logs batch-level action-dimension MAE, joint MAE, and gripper metrics for pi0/pi0.5 model families
   - writes the same flat metrics stream to `<checkpoint_dir>/train_metrics.jsonl`
+  - explicitly registers the `train/*`, `val/*`, and `checkpoint/*` metric families with W&B so the new series appear with consistent step axes
 - Extended `src/openpi/training/data_loader.py` so the training loop can recover raw batch metadata (`task`, `episode_index`, `frame_index`) for logging without changing the model input path.
 
 What was verified:

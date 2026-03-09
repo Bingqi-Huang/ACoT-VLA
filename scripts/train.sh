@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 export DEBUG_MODE=false
-export WANDB_MODE=offline
+export WANDB_MODE=online
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.95
 export CUDA_VISIBLE_DEVICES=0,1,2
 

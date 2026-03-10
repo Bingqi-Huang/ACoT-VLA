@@ -12,6 +12,7 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Any
 
 import numpy as np
@@ -115,6 +116,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional path to save machine-readable results.",
+    )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=10,
+        help="Print progress every N scanned episodes. Set to 0 to disable periodic progress logs.",
     )
     return parser.parse_args()
 
@@ -300,6 +307,7 @@ def scan_dataset(
     check_mode: str,
     scan_order: str,
     stride: int,
+    progress_every: int,
 ) -> dict[str, Any]:
     dataset_dir = dataset_dir.expanduser().resolve()
     meta = lerobot_dataset.LeRobotDatasetMetadata(dataset_dir.name, root=dataset_dir)
@@ -312,8 +320,16 @@ def scan_dataset(
     camera_counter: Counter[str] = Counter()
     frame_offset_counter: Counter[int] = Counter()
     camera_episode_counter: dict[str, set[int]] = defaultdict(set)
+    started_at = time.monotonic()
 
-    for episode_index in selected_episodes:
+    if selected_episodes:
+        print(
+            f"Scanning {len(selected_episodes)} episodes x {len(selected_cameras)} camera(s) "
+            f"for `{dataset_dir.name}` with mode={check_mode}, backend={backend}...",
+            flush=True,
+        )
+
+    for scanned_count, episode_index in enumerate(selected_episodes, start=1):
         data_path = dataset_dir / meta.get_data_file_path(episode_index)
         query_ts = load_episode_timestamps(data_path)
 
@@ -350,6 +366,24 @@ def scan_dataset(
             camera_episode_counter[camera_key].add(episode_index)
             for offset in summary.dominant_frame_offsets:
                 frame_offset_counter[offset] += 1
+
+        if progress_every > 0 and (
+            scanned_count == 1
+            or scanned_count == len(selected_episodes)
+            or scanned_count % progress_every == 0
+        ):
+            elapsed_s = time.monotonic() - started_at
+            rate = scanned_count / elapsed_s if elapsed_s > 0 else 0.0
+            remaining = len(selected_episodes) - scanned_count
+            eta_s = remaining / rate if rate > 0 else float("inf")
+            eta_str = f"{eta_s / 60:.1f}m" if np.isfinite(eta_s) else "unknown"
+            print(
+                f"[progress] {scanned_count}/{len(selected_episodes)} episodes "
+                f"({scanned_count / len(selected_episodes):.1%}), "
+                f"affected_so_far={len({item.episode_index for item in per_episode})}, "
+                f"elapsed={elapsed_s / 60:.1f}m, eta={eta_str}",
+                flush=True,
+            )
 
     affected_episode_ids = sorted({item.episode_index for item in per_episode})
     result = {
@@ -397,6 +431,7 @@ def main() -> int:
         check_mode=args.check_mode,
         scan_order=args.scan_order,
         stride=args.stride,
+        progress_every=args.progress_every,
     )
 
     print(f"Dataset: {result['dataset_name']}")

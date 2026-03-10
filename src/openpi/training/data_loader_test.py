@@ -280,8 +280,8 @@ def test_create_lerobot_dataset_uses_root_for_absolute_paths(monkeypatch):
     calls = []
 
     class _FakeDatasetCtor:
-        def __init__(self, repo_id, root=None, episodes=None, delta_timestamps=None):
-            calls.append((repo_id, root, episodes, delta_timestamps))
+        def __init__(self, repo_id, root=None, episodes=None, delta_timestamps=None, tolerance_s=None):
+            calls.append((repo_id, root, episodes, delta_timestamps, tolerance_s))
 
     monkeypatch.setattr(_data_loader.lerobot_dataset, "LeRobotDataset", _FakeDatasetCtor)
 
@@ -289,6 +289,7 @@ def test_create_lerobot_dataset_uses_root_for_absolute_paths(monkeypatch):
         "/ssd_workspace/huggingface/lerobot/Reasoning2Action-Sim/pour_workpiece",
         episodes=[1, 2],
         delta_timestamps={"action": [0.0, 0.1]},
+        tolerance_s=0.15,
     )
 
     assert calls == [
@@ -297,6 +298,7 @@ def test_create_lerobot_dataset_uses_root_for_absolute_paths(monkeypatch):
             pathlib.Path("/ssd_workspace/huggingface/lerobot/Reasoning2Action-Sim/pour_workpiece"),
             [1, 2],
             {"action": [0.0, 0.1]},
+            0.15,
         )
     ]
 

@@ -105,6 +105,8 @@ class DataConfig:
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     # Optional deterministic train/validation split at the episode level.
     episode_split: "EpisodeSplitConfig | None" = None
+    # Allowed deviation in seconds when loading video frames by timestamp.
+    video_tolerance_s: float = 1e-4
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1423,6 +1425,7 @@ def _reasoning2action_data_config(
             dataloader_sampler="subtask",
             prompt_from_hl_instruction=True,
             episode_split=EpisodeSplitConfig(split_name=split_name),
+            video_tolerance_s=float(os.getenv("ACOT_CHALLENGE_VIDEO_TOLERANCE_S", "0.15")),
         ),
         joint_action_shifts=(2, 1),
         extra_delta_transform=(True, True),

@@ -313,6 +313,7 @@ def _create_lerobot_dataset(
     *,
     episodes: list[int] | None,
     delta_timestamps: dict[str, list[float]],
+    tolerance_s: float,
 ):
     repo_path = pathlib.Path(repo_id).expanduser()
     if repo_path.is_absolute():
@@ -321,11 +322,13 @@ def _create_lerobot_dataset(
             root=repo_path,
             episodes=episodes,
             delta_timestamps=delta_timestamps,
+            tolerance_s=tolerance_s,
         )
     return lerobot_dataset.LeRobotDataset(
         repo_id,
         episodes=episodes,
         delta_timestamps=delta_timestamps,
+        tolerance_s=tolerance_s,
     )
 
 
@@ -408,6 +411,7 @@ def create_torch_dataset(
                         key: [t / dataset_meta.fps for t in range(action_chunk_size)]
                         for key in data_config.action_sequence_keys
                     },
+                    tolerance_s=data_config.video_tolerance_s,
                 )
                 for repo_path, dataset_meta in zip(repo_id, dataset_metas, strict=True)
             ]
@@ -428,13 +432,14 @@ def create_torch_dataset(
 
     else:
         dataset_meta = _create_dataset_metadata(repo_id)
-        dataset = lerobot_dataset.LeRobotDataset(
+        dataset = _create_lerobot_dataset(
             data_config.repo_id,
             episodes=typing.cast(list[int] | None, selected_episodes),
             delta_timestamps={
                 key: [t / dataset_meta.fps for t in range(action_chunk_size)]
                 for key in data_config.action_sequence_keys
             },
+            tolerance_s=data_config.video_tolerance_s,
         )
         dataset = _make_selected_episode_compatible_dataset(dataset, required_camera_keys)
 

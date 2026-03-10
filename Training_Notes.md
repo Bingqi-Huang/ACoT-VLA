@@ -38,6 +38,11 @@ If you want to override the base initialization checkpoint, set:
 export ACOT_CHALLENGE_INIT_WEIGHTS=/data/admins/bingqi/Projects/ACoT-VLA/checkpoints/baseline_checkpoint/params
 ```
 
+If we got any unaligned data(default is 0.0001):
+```bash
+export ACOT_CHALLENGE_VIDEO_TOLERANCE_S=0.15
+```
+
 Clean up depth camera info in meta data of datasets:
 ```bash
 uv run ./scripts/cleanup_depth_metadata.py "$ACOT_CHALLENGE_DATA_ROOT"

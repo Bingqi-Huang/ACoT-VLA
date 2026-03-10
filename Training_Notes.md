@@ -74,8 +74,8 @@ Use debug mode first:
 
 ```bash
 DEBUG_MODE=true uv run python scripts/train.py \
-    acot_challenge_generalist_lora_clean_desktop \
-    --exp_name clean_desktop_debug \
+    acot_challenge_generalist_lora_generalist \
+    --exp_name generalist_v1_bs96 \
     --overwrite
 ```
 
@@ -91,7 +91,7 @@ Check:
 When the debug run is clean:
 
 ```bash
-bash scripts/train.sh acot_challenge_generalist_lora_clean_desktop clean_desktop_v1
+bash scripts/train.sh acot_challenge_generalist_lora_generalist generalist_v1_bs96 --resume=true
 ```
 
 Or directly:

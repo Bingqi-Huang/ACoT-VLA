@@ -110,7 +110,7 @@ class DataConfig:
 @dataclasses.dataclass(frozen=True)
 class EpisodeSplitConfig:
     # Fraction of episodes assigned to the training split.
-    train_ratio: float = 0.8
+    train_ratio: float = 0.95
     # Seed used to shuffle episodes before splitting.
     seed: int = 42
     # Where to persist the split manifest. Defaults to <assets_dir>/episode_splits.
@@ -252,8 +252,7 @@ class DataConfigFactory(abc.ABC):
                     q99 = np.mean([norm_stats[key].q99 for norm_stats in all_norm_stats], axis=0),
                 )
 
-
-            norm_stats = agg
+            norm_stats = self._stabilize_norm_stats(agg)
 
             # data_assets_dir = str(assets_dir / asset_id)
             # norm_stats = _normalize.load(_download.maybe_download(data_assets_dir))
@@ -262,6 +261,36 @@ class DataConfigFactory(abc.ABC):
         except FileNotFoundError:
             logging.info(f"Norm stats not found in {data_assets_dir}, skipping.")
         return None
+
+    def _stabilize_norm_stats(
+        self,
+        norm_stats: dict[str, _transforms.NormStats],
+        *,
+        min_std: float = 1e-4,
+    ) -> dict[str, _transforms.NormStats]:
+        from openpi.shared.normalize import NormStats
+
+        stabilized = {}
+        gaussian_q01_to_q99 = 4.6526957480816815
+        for key, stats in norm_stats.items():
+            mean = np.asarray(stats.mean, dtype=np.float32)
+            std = np.asarray(stats.std, dtype=np.float32)
+            q01 = None if stats.q01 is None else np.asarray(stats.q01, dtype=np.float32)
+            q99 = None if stats.q99 is None else np.asarray(stats.q99, dtype=np.float32)
+
+            repaired_std = std
+            if q01 is not None and q99 is not None:
+                robust_std = (q99 - q01) / gaussian_q01_to_q99
+                repaired_std = np.where(repaired_std > min_std, repaired_std, robust_std)
+
+            repaired_std = np.maximum(repaired_std, min_std)
+            stabilized[key] = NormStats(
+                mean=mean,
+                std=repaired_std,
+                q01=q01,
+                q99=q99,
+            )
+        return stabilized
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2266,8 +2295,10 @@ _CONFIGS = [
                 "place_block_into_box",
                 "take_wrong_item_shelf",
                 "stock_and_straighten_shelf",
+                "stock_and_straighten_shelf_part_2",
                 "sorting_packages_part_1",
                 "sorting_packages_part_2",
+                "sorting_packages_part_3",
                 "clean_the_desktop_part_1",
                 "clean_the_desktop_part_2",
             ),
@@ -2275,10 +2306,10 @@ _CONFIGS = [
             split_name="acot_challenge_generalist_lora_all",
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=10_000,
-            peak_lr=5e-5,
-            decay_steps=50_000,
-            decay_lr=5e-6,
+            warmup_steps=5_000,
+            peak_lr=4e-5,
+            decay_steps=40_000,
+            decay_lr=4e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=None,
@@ -2288,11 +2319,11 @@ _CONFIGS = [
                 "gs://openpi-assets/checkpoints/pi05_base/params",
             )
         ),
-        num_train_steps=50_000,
+        num_train_steps=40_000,
         save_interval=5000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 200,
         num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
-        batch_size=18 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
-        grad_accum_steps=4 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        batch_size=96 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
+        grad_accum_steps=1 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         freeze_filter=_reasoning2action_lora_freeze_filter(),
     ),
     # A dummy smoke run with only 1 task (2 parts)
@@ -2346,7 +2377,7 @@ _CONFIGS = [
                 "clean_the_desktop_part_2",
             ),
             asset_id=os.getenv(
-                "ACOT_CHALLENGE_GENERALIST_CLEAN_DESKTOP_ASSET_ID",
+                "ACOT_CHALLENGE_GENERALIST_5_TASKS_ASSET_ID",
                 "reasoning2action_sim_generalist_5_tasks",
             ),
             split_name="acot_challenge_generalist_lora_5_tasks",
@@ -2361,8 +2392,11 @@ _CONFIGS = [
         ema_decay=None,
         weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
             os.getenv(
-                "ACOT_CHALLENGE_INIT_WEIGHTS",
-                "/data/admins/bingqi/Projects/ACoT-VLA/checkpoints/baseline_checkpoint/params",
+                "ACOT_CHALLENGE_5_TASKS_INIT_WEIGHTS",
+                os.getenv(
+                    "ACOT_CHALLENGE_INIT_WEIGHTS",
+                    "gs://openpi-assets/checkpoints/pi05_base/params",
+                ),
             )
         ),
         num_train_steps=40_000,

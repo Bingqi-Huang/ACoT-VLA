@@ -169,6 +169,37 @@ class FakeDataset(Dataset):
         return self._num_samples
 
 
+class MultiDataset(Dataset):
+    def __init__(self, datasets: Sequence[Dataset]):
+        if not datasets:
+            raise ValueError("At least one dataset is required.")
+        self._datasets = list(datasets)
+        self.disabled_features: set[str] = set()
+
+        first_features = set(getattr(self._datasets[0], "features", []))
+        if first_features:
+            intersection_features = set(first_features)
+            for ds in self._datasets[1:]:
+                intersection_features.intersection_update(getattr(ds, "features", []))
+            for ds in self._datasets:
+                extra_keys = set(getattr(ds, "features", [])).difference(intersection_features)
+                self.disabled_features.update(extra_keys)
+
+    def __getitem__(self, index: SupportsIndex):
+        idx = index.__index__()
+        for dataset in self._datasets:
+            if idx < len(dataset):
+                item = dataset[idx]
+                if self.disabled_features:
+                    item = {k: v for k, v in item.items() if k not in self.disabled_features}
+                return item
+            idx -= len(dataset)
+        raise IndexError("Index out of range")
+
+    def __len__(self) -> int:
+        return sum(len(dataset) for dataset in self._datasets)
+
+
 class EpisodeSubsetCompatibleLeRobotDataset(Dataset):
     def __init__(
         self,
@@ -267,6 +298,37 @@ def _required_camera_keys_from_data_config(data_config: _config.DataConfig) -> s
     return required_camera_keys or None
 
 
+def _create_dataset_metadata(repo_id: str):
+    repo_path = pathlib.Path(repo_id).expanduser()
+    if repo_path.is_absolute():
+        try:
+            return lerobot_dataset.LeRobotDatasetMetadata(repo_path.name, root=repo_path)
+        except TypeError:
+            return lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+    return lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+
+
+def _create_lerobot_dataset(
+    repo_id: str,
+    *,
+    episodes: list[int] | None,
+    delta_timestamps: dict[str, list[float]],
+):
+    repo_path = pathlib.Path(repo_id).expanduser()
+    if repo_path.is_absolute():
+        return lerobot_dataset.LeRobotDataset(
+            repo_path.name,
+            root=repo_path,
+            episodes=episodes,
+            delta_timestamps=delta_timestamps,
+        )
+    return lerobot_dataset.LeRobotDataset(
+        repo_id,
+        episodes=episodes,
+        delta_timestamps=delta_timestamps,
+    )
+
+
 def _make_selected_episode_compatible_dataset(dataset, required_camera_keys: set[str] | None = None):
     sub_datasets = getattr(dataset, "_datasets", None)
     if sub_datasets is not None:
@@ -333,16 +395,22 @@ def create_torch_dataset(
     if isinstance(repo_id, list):
         # If repo_id is a list, create a dataset for each repo_id and concatenate them.
         dataset_metas = [
-            lerobot_dataset.LeRobotDatasetMetadata(r) for r in repo_id
+            _create_dataset_metadata(r) for r in repo_id
         ]
-        dataset = lerobot_dataset.MultiLeRobotDataset(
-            repo_id,
-            episodes=typing.cast(dict[str, list[int]] | None, selected_episodes),
-            delta_timestamps={
-                key: [t / dataset_meta.fps for t in range(action_chunk_size)]
-                for dataset_meta in dataset_metas
-                for key in data_config.action_sequence_keys
-            },
+        dataset = MultiDataset(
+            [
+                _create_lerobot_dataset(
+                    repo_path,
+                    episodes=typing.cast(dict[str, list[int]] | None, selected_episodes).get(repo_path)
+                    if isinstance(selected_episodes, dict)
+                    else None,
+                    delta_timestamps={
+                        key: [t / dataset_meta.fps for t in range(action_chunk_size)]
+                        for key in data_config.action_sequence_keys
+                    },
+                )
+                for repo_path, dataset_meta in zip(repo_id, dataset_metas, strict=True)
+            ]
         )
         dataset = _make_selected_episode_compatible_dataset(dataset, required_camera_keys)
         if data_config.prompt_from_task:
@@ -359,7 +427,7 @@ def create_torch_dataset(
             print(f"Dataset {i} has {len(d)} frames.")
 
     else:
-        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+        dataset_meta = _create_dataset_metadata(repo_id)
         dataset = lerobot_dataset.LeRobotDataset(
             data_config.repo_id,
             episodes=typing.cast(list[int] | None, selected_episodes),

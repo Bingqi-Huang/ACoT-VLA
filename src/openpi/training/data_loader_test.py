@@ -1,5 +1,6 @@
 import dataclasses
 import pickle
+import pathlib
 
 import jax
 import torch
@@ -138,6 +139,18 @@ class _FakeMultiDataset:
         self._datasets = datasets
 
 
+class _TinyDataset:
+    def __init__(self, items, *, features=None):
+        self._items = items
+        self.features = features or list(items[0].keys())
+
+    def __getitem__(self, idx):
+        return self._items[idx]
+
+    def __len__(self):
+        return len(self._items)
+
+
 def test_episode_subset_compatible_lerobot_dataset_maps_global_to_local(monkeypatch):
     monkeypatch.setattr(_data_loader.lerobot_dataset, "LeRobotDataset", _FakeLeRobotDataset)
     dataset = _FakeLeRobotDataset([5, 9], episode_index=9)
@@ -226,3 +239,76 @@ def test_required_camera_keys_from_data_config_extracts_only_used_image_sources(
     required_camera_keys = _data_loader._required_camera_keys_from_data_config(data_config)
 
     assert required_camera_keys == {"observation.images.hand_right"}
+
+
+def test_create_dataset_metadata_uses_root_for_absolute_paths(monkeypatch):
+    calls = []
+
+    class _FakeMeta:
+        def __init__(self, repo_id, root=None, revision=None, force_cache_sync=False):
+            del revision, force_cache_sync
+            calls.append((repo_id, root))
+
+    monkeypatch.setattr(_data_loader.lerobot_dataset, "LeRobotDatasetMetadata", _FakeMeta)
+
+    _data_loader._create_dataset_metadata("/ssd_workspace/huggingface/lerobot/Reasoning2Action-Sim/pour_workpiece")
+
+    assert calls == [
+        (
+            "pour_workpiece",
+            pathlib.Path("/ssd_workspace/huggingface/lerobot/Reasoning2Action-Sim/pour_workpiece"),
+        )
+    ]
+
+
+def test_create_dataset_metadata_preserves_hf_repo_ids(monkeypatch):
+    calls = []
+
+    class _FakeMeta:
+        def __init__(self, repo_id, root=None, revision=None, force_cache_sync=False):
+            del revision, force_cache_sync
+            calls.append((repo_id, root))
+
+    monkeypatch.setattr(_data_loader.lerobot_dataset, "LeRobotDatasetMetadata", _FakeMeta)
+
+    _data_loader._create_dataset_metadata("lerobot/aloha_sim_transfer_cube_human")
+
+    assert calls == [("lerobot/aloha_sim_transfer_cube_human", None)]
+
+
+def test_create_lerobot_dataset_uses_root_for_absolute_paths(monkeypatch):
+    calls = []
+
+    class _FakeDatasetCtor:
+        def __init__(self, repo_id, root=None, episodes=None, delta_timestamps=None):
+            calls.append((repo_id, root, episodes, delta_timestamps))
+
+    monkeypatch.setattr(_data_loader.lerobot_dataset, "LeRobotDataset", _FakeDatasetCtor)
+
+    _data_loader._create_lerobot_dataset(
+        "/ssd_workspace/huggingface/lerobot/Reasoning2Action-Sim/pour_workpiece",
+        episodes=[1, 2],
+        delta_timestamps={"action": [0.0, 0.1]},
+    )
+
+    assert calls == [
+        (
+            "pour_workpiece",
+            pathlib.Path("/ssd_workspace/huggingface/lerobot/Reasoning2Action-Sim/pour_workpiece"),
+            [1, 2],
+            {"action": [0.0, 0.1]},
+        )
+    ]
+
+
+def test_multi_dataset_indexes_across_subdatasets():
+    dataset = _data_loader.MultiDataset(
+        [
+            _TinyDataset([{"x": 1}, {"x": 2}]),
+            _TinyDataset([{"x": 3}]),
+        ]
+    )
+
+    assert len(dataset) == 3
+    assert dataset[0] == {"x": 1}
+    assert dataset[2] == {"x": 3}

@@ -15,7 +15,7 @@ def sample_subtask(dataset):
     
     sub_datasets = []
     
-    if isinstance(base_ds, lerobot_dataset.MultiLeRobotDataset):
+    if isinstance(base_ds, lerobot_dataset.MultiLeRobotDataset) or hasattr(base_ds, "_datasets"):
         for sub_ds in base_ds._datasets:
             sub_datasets.append(sub_ds)
     else:

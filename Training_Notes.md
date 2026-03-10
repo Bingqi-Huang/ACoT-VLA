@@ -29,13 +29,18 @@ For the clean-desktop test, use a **plain checkpoint-serving path**, not the rou
 Make sure the extracted dataset root exists, or set:
 
 ```bash
-export ACOT_CHALLENGE_DATA_ROOT=~/Datasets/lerobot/Reasoning2Action-Sim
+export ACOT_CHALLENGE_DATA_ROOT=/ssd_workspace/huggingface/lerobot/Reasoning2Action-Sim
 ```
 
 If you want to override the base initialization checkpoint, set:
 
 ```bash
 export ACOT_CHALLENGE_INIT_WEIGHTS=/data/admins/bingqi/Projects/ACoT-VLA/checkpoints/baseline_checkpoint/params
+```
+
+Clean up depth camera info in meta data of datasets:
+```bash
+uv run ./scripts/cleanup_depth_metadata.py "$ACOT_CHALLENGE_DATA_ROOT"
 ```
 
 Optional local `uv` cache:
@@ -45,13 +50,15 @@ export UV_CACHE_DIR=/tmp/uv-cache
 mkdir -p "${UV_CACHE_DIR}"
 ```
 
+
 ## 2. Compute norm stats for the clean-desktop config
 
 This must be run before training:
 
 ```bash
 uv run python scripts/compute_norm_stats.py \
-    --config-name acot_challenge_generalist_lora_clean_desktop
+    --config-name acot_challenge_generalist_lora_clean_desktop \
+    --split train
 ```
 
 The config writes stats under the asset id for the clean-desktop config.
@@ -220,6 +227,45 @@ DEBUG_MODE=true uv run python scripts/train.py --config-name acot_challenge_gene
 
 This is the **full competition plan**. Keep this as the long-term path after the clean-desktop test-server workflow above.
 
+## Routing contract from Genie Sim
+
+The routed-serving plan should be driven by the **actual websocket payload**, not by the benchmark YAML name.
+
+- The simulator sends msgpack+numpy payloads over websocket, not JSON.
+- The inference payload key to route on is `payload["task_name"]`.
+- In the current ICRA evaluation chain, `payload["task_name"]` is the benchmark `sub_task_name`, not the outer background `benchmark.task_name`.
+- The payload does **not** include `instance_id` or the outer background task name. Finer-grained routing beyond sub-task must rely on prompt or image content.
+- `sorting_packages_continuous` must be routed by `task_name`; its prompt alone is too generic.
+- The current G2 consumer path is effectively `abs_joint`. Keeping the server on the existing joint-action path is the safest submission contract.
+
+For this repo, that means the routed server should treat the following as the public route-key surface:
+
+| `payload["task_name"]` | Adapter target | Training data backing it | Notes |
+|---|---|---|---|
+| `hold_pot` | `hold_pot` | `hold_pot` | Rule-evaluated |
+| `clean_the_desktop` | `clean_the_desktop` | all `clean_the_desktop*` shards, currently `clean_the_desktop_part_1` + `clean_the_desktop_part_2` | VLM-evaluated |
+| `open_door` | `open_door` | `open_door` | Rule-evaluated |
+| `place_block_into_box` | `place_block_into_box` | `place_block_into_box` | Rule-evaluated |
+| `pour_workpiece` | `pour_workpiece` | `pour_workpiece` | Rule-evaluated |
+| `scoop_popcorn` | `scoop_popcorn` | `scoop_popcorn` | VLM-evaluated |
+| `sorting_packages` | `sorting_packages` | all `sorting_packages*` shards, currently `sorting_packages_part_1` + `sorting_packages_part_2` + `sorting_packages_part_3` | Rule-evaluated |
+| `sorting_packages_continuous` | `sorting_packages` | same sorting shard set as above | Same adapter as `sorting_packages` |
+| `stock_and_straighten_shelf` | `stock_and_straighten_shelf` | all `stock_and_straighten_shelf*` shards, currently `stock_and_straighten_shelf` + `stock_and_straighten_shelf_part_2` | Rule-evaluated |
+| `take_wrong_item_shelf` | `take_wrong_item_shelf` | `take_wrong_item_shelf` | Rule-evaluated |
+
+Operationally, this is **10 route keys backed by 9 specialist adapters**, plus the `_default` generalist fallback.
+
+## Current code/doc mismatches to keep in mind
+
+The docs above describe the intended ICRA submission contract. The current codebase is close, but not fully aligned yet.
+
+- The current routed implementation still contains a legacy alias `grab_toy -> place_block_into_box` in `src/openpi/policies/adapter_routed_policy.py`. That alias is not part of the public ICRA route-key contract and should be removed from the final serving path.
+- The current full generalist config already includes additional same-task storage shards such as `stock_and_straighten_shelf_part_2` and `sorting_packages_part_3`. This is correct in spirit because `_part_*` directories are not new tasks; they are additional data for the same routed task family.
+- The current specialist configs are still incomplete relative to that shard-merging rule:
+  - `acot_specialist_stock_shelf` should use both `stock_and_straighten_shelf` and `stock_and_straighten_shelf_part_2`
+  - `acot_specialist_sorting` should use `sorting_packages_part_1`, `sorting_packages_part_2`, and `sorting_packages_part_3`
+- Routed serving exists in code, but it still lacks the validation depth needed for a final submission image: no documented all-10-key smoke coverage, no structured raw-key-to-adapter logging, and no recorded end-to-end run with real extracted adapters.
+
 ## 1. Prepare the environment
 
 Make sure your extracted dataset root exists under `~/Datasets/lerobot/Reasoning2Action-Sim` or set:
@@ -320,6 +366,12 @@ bash scripts/train.sh acot_specialist_sorting specialist_v1
 bash scripts/train.sh acot_specialist_clean_desktop specialist_v1
 ```
 
+Notes:
+
+- `acot_specialist_sorting` is the shared specialist for both `sorting_packages` and `sorting_packages_continuous`, and it should consume all `sorting_packages*` shards.
+- `acot_specialist_clean_desktop` is trained from all clean-desktop shards and serves the single inference route key `clean_the_desktop`.
+- `acot_specialist_stock_shelf` should consume all `stock_and_straighten_shelf*` shards.
+
 ## 8. Extract adapters
 
 Create the adapter directory:
@@ -374,14 +426,17 @@ Verify at least:
 
 - `task_name="pour_workpiece"`
 - `task_name="sorting_packages"`
+- `task_name="sorting_packages_continuous"`
+- `task_name="clean_the_desktop"`
 - unknown task name fallback
 
 Confirm:
 
 - server responds
 - action shape is valid
-- waist behavior is correct for sorting
+- waist behavior is correct for both sorting route keys
 - fallback uses `_default`
+- logged raw route key matches the adapter you expect
 
 ## 11. Validate Docker startup
 
@@ -413,6 +468,9 @@ Confirm:
 - server auto-starts
 - server listens on `8999`
 - websocket path works
+- routed behavior is keyed only by `payload["task_name"]`
+- unknown route keys fall back to `_default`
+- `sorting_packages_continuous` reuses the `sorting_packages` adapter
 
 Then update:
 
@@ -422,7 +480,20 @@ AGENTS/handoff.md
 AGENTS/experiments.md
 ```
 
-## 13. Recommended immediate next 3 commands for the full plan
+## 13. Planned code adjustments before final submission
+
+No serving-code change is required immediately to adopt the corrected routing contract; the current routed path already reads `obs["task_name"]`.
+
+Before final submission, the code plan should be:
+
+1. Make the routing table configurable or at least centralize the documented 10-key mapping in one place, instead of relying on an implicit hard-coded table.
+2. Add a focused routed-serving smoke test that covers all 10 public route keys plus unknown fallback.
+3. Log both the raw incoming `task_name` and the resolved adapter name on route switches so evaluation-time misroutes are visible in container logs.
+4. Remove the legacy `grab_toy -> place_block_into_box` alias from the routed-serving implementation so code matches the public ICRA contract.
+5. Update specialist configs so each task family consumes all known same-task shards, especially stock-shelf and sorting.
+6. Keep the existing joint-action serving path; do not switch to pose output unless the serving and post-process path is re-validated end-to-end.
+
+## 14. Recommended immediate next 3 commands for the full plan
 
 ```bash
 export ACOT_CHALLENGE_DATA_ROOT=~/Datasets/lerobot/Reasoning2Action-Sim

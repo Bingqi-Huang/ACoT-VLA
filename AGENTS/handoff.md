@@ -18,6 +18,74 @@ Immediate next step:
 
 ## Current Note
 
+Date: 2026-03-10
+
+Author: Codex
+
+What changed:
+
+- Updated routed-serving docs to reflect the reverse-engineered Genie Sim contract:
+  - websocket `payload["task_name"]` is the ICRA `sub_task_name`
+  - the outer benchmark scene name is not sent to the inference server
+  - the current public routing surface is 10 route keys backed by 9 specialist adapters plus `_default`
+- Updated `Training_Notes.md`, `AGENTS/PLAN.md`, `AGENTS/runbook_submission.md`, and `AGENTS/questions.md` to reflect the corrected routing model.
+- Recorded the routing-contract decision in `AGENTS/decisions.md`.
+- Recorded two further decisions in `AGENTS/decisions.md`:
+  - undocumented aliases should not remain in the final ICRA router
+  - `_part_*` dataset folders are same-task storage shards and must be merged into the same task family
+- Did not change serving code; instead documented a focused code-adjustment plan for before final submission.
+
+What was verified:
+
+- The existing routed policy implementation already reads `obs["task_name"]`, so the corrected contract matches the current architecture.
+- The existing post-process path already distinguishes sorting tasks by `task_name`, which remains compatible with the reverse-engineered evaluator behavior.
+
+What is still broken or unknown:
+
+- The router still contains a legacy defensive alias `grab_toy -> place_block_into_box`, even though the project decision is now to remove undocumented aliases from the final router.
+- The current specialist configs still lag the shard-merging decision: they do not yet include all known shards for stock-shelf and sorting task families.
+- There is still no automated smoke coverage over all 10 public route keys.
+- No runtime check has yet been added to log raw incoming route keys and resolved adapter names in a structured way.
+
+Immediate next step:
+
+- Remove the legacy alias from routed serving, update specialist configs to include all known same-task shards, and then add one narrow routed-serving smoke test that exercises all 10 known keys, `sorting_packages_continuous`, and unknown fallback.
+
+Date: 2026-03-10
+
+Author: Codex
+
+What changed:
+
+- Hardened `scripts/train.py` JSONL metric logging for local checkpoint dirs:
+  - switched the metric log path handling to `pathlib.Path`
+  - create/touch `train_metrics.jsonl` during logger init
+  - re-create the parent directory before each append
+- Corrected `acot_challenge_generalist_lora_5_tasks` defaults so they match the smoke-tested initialization path unless explicitly overridden:
+  - asset env var is now `ACOT_CHALLENGE_GENERALIST_5_TASKS_ASSET_ID`
+  - init weights env var is now `ACOT_CHALLENGE_5_TASKS_INIT_WEIGHTS`, falling back to `ACOT_CHALLENGE_INIT_WEIGHTS`, then `gs://openpi-assets/checkpoints/pi05_base/params`
+- Fixed the immediate high-loss culprit in the 5-task norm-stats path:
+  - `scripts/compute_norm_stats.py` now computes stats from the entire sampled batch instead of only `batch[key][0]`
+  - `scripts/compute_norm_stats.py` now always shuffles the sampled batches used for stats estimation
+  - `DataConfigFactory._load_norm_stats()` now repairs near-zero std values using quantile span with a small floor to avoid catastrophic over-normalization from bad saved stats
+
+What was verified:
+
+- `python3 -m py_compile` still passes for `scripts/train.py` and `src/openpi/training/config.py`.
+- Git inspection isolated the regression point for the 5-task config to commit `5f2a975`, where the config switched from the smoke-run `pi05_base` init to a local `baseline_checkpoint` and increased batch size from `60` to `96`.
+- The training crash reported at step ~600 matches the post-`1f9b16f` JSONL logging changes in `scripts/train.py`.
+- `python3 -m py_compile` passes for `scripts/compute_norm_stats.py`.
+- A CPU-mode batch probe on `acot_challenge_generalist_lora_5_tasks` showed the problematic normalized action dimension drop from `std≈21.6` / `max≈100.9` to `std≈0.135` / `max≈6.28` after the norm-stat fixes.
+
+What is still broken or unknown:
+
+- The very large 5-task train loss appears before meaningful optimization progress and is likely dominated by config/init drift rather than the new logger crash, but this still needs a real rerun after restoring the intended init checkpoint path.
+- The precise step-0 loss baseline for the older clean-desktop smoke run was not recoverable from the existing logs because those log files do not contain the later structured step summaries.
+
+Immediate next step:
+
+- Re-run `acot_challenge_generalist_lora_5_tasks` with the restored init-weight default or an explicit `ACOT_CHALLENGE_5_TASKS_INIT_WEIGHTS`, then compare the new step-0/step-100 loss against the previous `9e9-2e10` range before changing optimizer or batch-size settings.
+
 Date: 2026-03-09
 
 Author: Codex

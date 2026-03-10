@@ -165,8 +165,18 @@ def _build_manifest(data_config: _config.DataConfig) -> EpisodeSplitManifest:
     )
 
 
+def _create_dataset_metadata(repo_id: str):
+    repo_path = pathlib.Path(repo_id).expanduser()
+    if repo_path.is_absolute():
+        try:
+            return lerobot_dataset.LeRobotDatasetMetadata(repo_path.name, root=repo_path)
+        except TypeError:
+            return lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+    return lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+
+
 def _build_dataset_split(repo_id: str, split_config: _config.EpisodeSplitConfig) -> DatasetSplit:
-    meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+    meta = _create_dataset_metadata(repo_id)
     episode_lengths = {
         int(ep_idx): int(meta.episodes[ep_idx]["length"])
         for ep_idx in sorted(meta.episodes)

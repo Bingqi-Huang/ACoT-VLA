@@ -81,6 +81,10 @@ If architecture changes are made, the serving layer must still:
   - `params`
   - `assets`
 - If training config changes, submission startup must point to the matching config and checkpoint.
+- For the ICRA routed-serving path, the routing key is websocket `payload["task_name"]`, which is the evaluator `sub_task_name`.
+- Final submission routing must use only the documented public ICRA route keys. Do not rely on undocumented aliases such as `grab_toy`.
+- Dataset directories with suffixes such as `_part_2`, `_part_3`, etc. are storage shards of the same underlying task, not separate routed tasks.
+- All known shards of a routed task should be merged into the same task family for norm stats, generalist training, and specialist training unless a doc explicitly says otherwise.
 
 ## Official External References
 

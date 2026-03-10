@@ -11,8 +11,8 @@ shift 2
 
 TRAIN_ARGS=()
 for arg in "$@"; do
-    if [[ "${arg}" == "--overwirte" ]]; then
-        TRAIN_ARGS+=("--overwrite=true")
+    if [[ "${arg}" == "--overwrite" ]]; then
+        TRAIN_ARGS+=("--overwrite")
     else
         TRAIN_ARGS+=("${arg}")
     fi

@@ -2,11 +2,13 @@
 
 ## 1. Strategy Summary
 
-Train one **generalist** ACoT-VLA model with LoRA on all three Gemma branches, then fine-tune **9 per-task specialist adapters** from it. At inference, the evaluator provides `task_name` in every observation — use it as a **zero-error oracle router** to swap the correct LoRA + ACoT-head adapter before each episode. This gives the specialization benefit of 9 separate models at the memory cost of ~1.3 models.
+Train one **generalist** ACoT-VLA model with LoRA on all three Gemma branches, then fine-tune **9 specialist adapters** from it. At inference, route on `payload["task_name"]`, which in the current Genie Sim ICRA chain is the **sub-task key** rather than the outer benchmark scene name. This yields **10 public route keys backed by 9 specialist adapters** because `sorting_packages_continuous` should reuse the `sorting_packages` adapter. This gives the specialization benefit of separate models at the memory cost of ~1.3 models.
+
+Same-task dataset folders with names like `*_part_2` or `*_part_3` are storage shards of the same routed task family. They should be merged into the same training config and must not create new route keys.
 
 ## 2. Why This Wins
 
-The evaluation protocol hands us `task_name` for free (see `src/openpi/policies/policy.py:74`). This is a perfect router. Instead of one generalist compromising across 9 very different tasks (single-arm precision, dual-arm manipulation, waist movement), each task gets its own fully specialized adapter.
+The evaluation protocol hands us the effective route key for free: websocket `payload["task_name"]` is the ICRA `sub_task_name`. This is the correct oracle router. Instead of one generalist compromising across the public ICRA sub-tasks, each sub-task family gets its own specialized adapter, while `sorting_packages_continuous` safely shares the sorting adapter because prompt-only routing is too ambiguous there.
 
 | Approach | Specialization | Inference Memory | Engineering Cost |
 |---|---|---|---|
@@ -214,11 +216,11 @@ Create 9 specialist configs programmatically. Each specialist:
 | `acot_specialist_hold_pot` | Hold pot | `hold_pot` |
 | `acot_specialist_place_block` | Place block into box | `place_block_into_box` |
 | `acot_specialist_take_wrong_item` | Take wrong item from shelf | `take_wrong_item_shelf` |
-| `acot_specialist_stock_shelf` | Stock and straighten shelf | `stock_and_straighten_shelf` |
-| `acot_specialist_sorting` | Sorting packages | `sorting_packages_part_1`, `sorting_packages_part_2` |
-| `acot_specialist_clean_desktop` | Clean the desktop | `clean_the_desktop_part_1`, `clean_the_desktop_part_2` |
+| `acot_specialist_stock_shelf` | Stock and straighten shelf | all `stock_and_straighten_shelf*` shards, currently `stock_and_straighten_shelf`, `stock_and_straighten_shelf_part_2` |
+| `acot_specialist_sorting` | Sorting packages | all `sorting_packages*` shards, currently `sorting_packages_part_1`, `sorting_packages_part_2`, `sorting_packages_part_3` |
+| `acot_specialist_clean_desktop` | Clean the desktop | all `clean_the_desktop*` shards, currently `clean_the_desktop_part_1`, `clean_the_desktop_part_2` |
 
-**Implementation note:** To reduce config boilerplate, define a helper function that generates a specialist `TrainConfig` given a task name, repo_id list, and prompt map subset. Loop over the task table above and append to `_CONFIGS`.
+**Implementation note:** To reduce config boilerplate, define a helper function that generates a specialist `TrainConfig` given a task name, the full shard list for that task family, and the prompt map subset. Loop over the task table above and append to `_CONFIGS`.
 
 Each specialist's `prompt_map_inject_to_training` should include ONLY the relevant task's entry from the generalist's full prompt map. The prompt map keys are the dataset's task labels (e.g., `"Unload workpiece_icra_SIM"` for pour_workpiece).
 
@@ -333,7 +335,7 @@ Each `.npz` file is ~140MB. Total: ~1.4GB.
 
 ### 8.1 New File: `src/openpi/policies/adapter_routed_policy.py`
 
-This is the key serving component. It loads one base model and 9+ adapter param sets, then swaps the correct adapter into the model's state based on `task_name` before each inference call.
+This is the key serving component. It loads one base model and 9+ adapter param sets, then swaps the correct adapter into the model's state based on websocket `payload["task_name"]` before each inference call.
 
 **Architecture:**
 
@@ -383,7 +385,6 @@ TASK_ROUTING = {
     "scoop_popcorn": "scoop_popcorn",
     "hold_pot": "hold_pot",
     "place_block_into_box": "place_block_into_box",
-    "grab_toy": "place_block_into_box",
     "take_wrong_item_shelf": "take_wrong_item_shelf",
     "stock_and_straighten_shelf": "stock_and_straighten_shelf",
     "sorting_packages": "sorting_packages",
@@ -393,7 +394,9 @@ TASK_ROUTING = {
 # Unknown task_name → "_default" (generalist adapter)
 ```
 
-Include aliases (e.g., `grab_toy` → same adapter as `place_block_into_box`) so unknown evaluation task name variants still route correctly.
+Treat the list above as the public ICRA contract.
+
+For the current project decisions, the final ICRA router should not keep undocumented aliases at all. A legacy alias such as `grab_toy -> place_block_into_box` should be removed rather than preserved defensively.
 
 **The `post_process` method** should be inherited from the existing `Policy` class (handles waist actions for `sorting_packages`).
 
@@ -534,6 +537,8 @@ These are the exact trainable params when using the LoRA-everywhere freeze confi
 - [ ] `/healthz` endpoint returns 200
 - [ ] Inference with `task_name="pour_workpiece"` returns valid action shape
 - [ ] Inference with `task_name="sorting_packages"` returns actions with waist dims
+- [ ] Inference with `task_name="sorting_packages_continuous"` reuses the sorting adapter
+- [ ] Inference with `task_name="clean_the_desktop"` resolves to the clean-desktop adapter
 - [ ] Inference with unknown `task_name` uses fallback adapter
 - [ ] Docker image builds and starts server automatically
 
@@ -546,13 +551,13 @@ These are the exact trainable params when using the LoRA-everywhere freeze confi
 - **Target:** 2 days
 
 ### M1: Generalist Trained
-- Generalist trains to convergence on all 9 tasks
+- Generalist trains to convergence on all current Reasoning2Action training datasets
 - Loss stabilizes
 - First baseline score from submission
 - **Target:** 5-7 days after M0 (depends on GPU time)
 
 ### M2: Specialists Trained + Adapters Extracted
-- All 9 specialists trained from generalist checkpoint
+- All planned specialists trained from generalist checkpoint
 - All adapter `.npz` files extracted
 - **Target:** 3-5 days after M1
 
@@ -589,9 +594,9 @@ These are the exact trainable params when using the LoRA-everywhere freeze confi
 
 ## 14. Assumptions
 
-- The evaluation server provides `task_name` in every observation at inference time.
+- The evaluation server provides websocket `payload["task_name"]` in every observation, and this value is the ICRA `sub_task_name`.
 - `3 x A100 40G` is the primary training machine; no FSDP.
 - The competition inference GPU can hold ~8GB of model params (base + adapters).
-- All 9 tasks use the same observation schema (3 cameras + proprioceptive state).
-- Task names at evaluation time match or are aliasable to our training task names.
+- All public route keys use the same observation schema (3 cameras + proprioceptive state).
+- The public route keys are the current reverse-engineered set of 10 sub-task names; unknown values must fall back to `_default`.
 - v1 keeps the core ACoT loss, sampler, and architecture unchanged. Gains come from per-task specialization via LoRA adapter routing.

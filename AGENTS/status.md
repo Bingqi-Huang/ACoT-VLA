@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-03-09
+Last updated: 2026-03-10
 
 ## Current State
 
@@ -94,6 +94,26 @@ Last updated: 2026-03-09
 - Root cause identified for the large number of post-split “bad samples”: the current LeRobot version uses global `episode_index` values to index a local `episode_data_index` array after subsetting episodes, which breaks on non-contiguous episode subsets. `src/openpi/training/data_loader.py` now wraps selected-episode LeRobot datasets in a top-level pickle-safe compatibility dataset so query/padding logic remaps global episode ids to local subset positions while preserving the original `episode_index` in returned samples.
 - Added `scripts/run_norm_and_train.py` to sequentially run `compute_norm_stats.py` and then `train.py --overwrite=true` in one command, intended for unattended overnight finetuning starts after the split/data-loader fixes.
 - Added a shell-first unattended runner `scripts/run_norm_and_train.sh`; `scripts/train.sh` now forwards extra CLI args to `train.py` and normalizes the common typo `--overwirte` to `--overwrite=true`.
+- Diagnosed two regressions in the current 5-task finetuning path:
+  - `scripts/train.py` JSONL metric logging used `etils.epath.Path.open("a")`, which can raise `FileNotFoundError` for a missing local file; logger now uses `pathlib.Path`, touches the file up front, and re-creates the parent directory before each append.
+  - `acot_challenge_generalist_lora_5_tasks` had drifted from the smoke-tested init path by defaulting to a local `baseline_checkpoint` and by reusing the clean-desktop asset env var name; it now uses task-specific asset env naming and falls back to the same `ACOT_CHALLENGE_INIT_WEIGHTS` / `pi05_base` path used by the known-good smoke config unless explicitly overridden.
+- Identified the immediate cause of the huge 5-task step-0 loss as biased / degenerate normalization stats rather than the optimizer:
+  - `scripts/compute_norm_stats.py` was sampling only the first element of each batch and, for the common case without `max_frames`, doing so without shuffling, which biases stats toward the earliest contiguous frames/tasks.
+  - For the current 5-task asset this produced a near-zero std on at least one action dimension; a CPU-mode probe showed normalized `actions[..., 14]` at `std≈21.6`, `max≈100.9` before the fix.
+- `scripts/compute_norm_stats.py` now accumulates stats from the full batch and always shuffles its sampled batches.
+- `DataConfigFactory._load_norm_stats()` now repairs near-zero std values using quantile span and a small floor, which reduced the same normalized action batch to `std≈0.135`, `max≈6.28` without requiring an immediate asset rewrite.
+- Reverse-engineered Genie Sim routing contract has now been documented:
+  - websocket `payload["task_name"]` is the evaluator `sub_task_name`
+  - the outer benchmark `task_name` is not sent to the server
+  - the current public ICRA surface is 10 route keys / 26 instances
+  - `sorting_packages_continuous` should route by `task_name` and share the sorting adapter
+  - routed-serving docs were updated; no code changes were applied yet
+- Finalized two routing/data decisions from the reverse-engineering work:
+  - undocumented aliases such as `grab_toy -> place_block_into_box` should not remain in the final ICRA router
+  - same-task folders with `_part_*` suffixes are storage shards of one task and should be merged into the same task family during training
+- Current code/doc mismatches are now explicit:
+  - `src/openpi/policies/adapter_routed_policy.py` still carries the legacy alias `grab_toy -> place_block_into_box`
+  - `acot_specialist_stock_shelf` and `acot_specialist_sorting` currently do not include all known shards of their task families, even though the full generalist config already includes `stock_and_straighten_shelf_part_2` and `sorting_packages_part_3`
 
 ## Known Open Work
 
@@ -107,6 +127,13 @@ Last updated: 2026-03-09
 - Measure task-switch latency once real adapter files are available.
 - Re-run `scripts/eval_offline.py` on the previously failing clean-desktop checkpoint and confirm it now gets past dataset construction into actual metric computation.
 - Re-run `scripts/compute_norm_stats.py` with worker processes enabled and confirm the new pickle-safe selected-episode wrapper gets past the earlier `patched_get_query_indices` spawn/pickling failure.
+- Add routed-serving smoke coverage for all 10 public route keys plus unknown fallback.
+- Remove the legacy `grab_toy -> place_block_into_box` alias from the routed-serving code so implementation matches the documented public ICRA contract.
+- Update specialist configs so each task family consumes all known shards of that task:
+  - `acot_specialist_stock_shelf` should include `stock_and_straighten_shelf` and `stock_and_straighten_shelf_part_2`
+  - `acot_specialist_sorting` should include `sorting_packages_part_1`, `sorting_packages_part_2`, and `sorting_packages_part_3`
+- Audit other task families for future `_part_*` shards and fold them into the same-task configs rather than creating new route keys.
+- Record one real end-to-end routed-serving validation run with extracted adapters so the routing path is validated beyond static code inspection.
 
 ## Verification Notes
 

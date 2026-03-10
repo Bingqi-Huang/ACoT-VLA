@@ -69,3 +69,50 @@ Why:
 Consequence:
 
 - Checkpoints can now be ranked from the val episode split using JSON metrics and a summary CSV before investing in heavier rollout-based validation or submission packaging.
+
+Date: 2026-03-10
+
+Decision:
+
+- Treat websocket `payload["task_name"]` as the routing contract for ICRA submission, and interpret it as the evaluator `sub_task_name` rather than the outer benchmark scene name.
+
+Why:
+
+- Reverse-engineering of Genie Sim shows the policy payload writes `task_name=self.sub_task_name`, while the outer benchmark `task_name` is used only for config/scene selection and result directory layout.
+
+Consequence:
+
+- Routed serving should key on the documented sub-task names.
+- The public routing surface is currently 10 route keys, with `sorting_packages_continuous` sharing the `sorting_packages` adapter.
+- Prompt-only routing is insufficient for `sorting_packages_continuous`, and unknown values must fall back to `_default`.
+
+Date: 2026-03-10
+
+Decision:
+
+- Do not keep undocumented task aliases in the final ICRA router.
+
+Why:
+
+- The reverse-engineered evaluator contract already gives the true public route keys via websocket `payload["task_name"] = sub_task_name`. Undocumented aliases risk masking route mismatches and confusing future maintenance.
+
+Consequence:
+
+- The final public routing table should contain only the documented ICRA sub-task keys.
+- Legacy aliases such as `grab_toy -> place_block_into_box` should be removed from the final serving path unless a later reverse-engineering result proves they are actually used by evaluation.
+
+Date: 2026-03-10
+
+Decision:
+
+- Treat same-task dataset folders with `_part_*` suffixes as storage shards of one routed task, not as separate tasks.
+
+Why:
+
+- For large tasks, the dataset is split across multiple folders only because one folder is too large; the split does not imply a different task semantics or a different route key.
+
+Consequence:
+
+- All known shards for a task should be merged into that task family during training.
+- Specialist configs should use all shards of their task family, not a subset chosen only by folder naming.
+- Routing remains keyed by the single public task name, not by shard name.

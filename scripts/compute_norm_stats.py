@@ -52,10 +52,12 @@ def create_torch_dataloader(
     dataset = _data_loader.SafeDataset(dataset)
     if max_frames is not None and max_frames < len(dataset):
         num_batches = max_frames // batch_size
-        shuffle = True
     else:
         num_batches = len(dataset) // batch_size
-        shuffle = False
+
+    # Norm stats are estimated from a subset of batches below, so keep sampling shuffled
+    # instead of taking the first contiguous chunk of frames/tasks.
+    shuffle = True
 
     data_loader = _data_loader.TorchDataLoader(
         dataset,
@@ -143,7 +145,7 @@ def main(
             continue
 
         for key in keys:
-            values = np.asarray(batch[key][0])
+            values = np.asarray(batch[key])
             stats[key].update(values.reshape(-1, values.shape[-1]))
 
         pbar.update(1)

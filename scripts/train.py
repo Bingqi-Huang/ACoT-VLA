@@ -2,6 +2,7 @@ import dataclasses
 import functools
 import json
 import logging
+import pathlib
 import platform
 import re
 import time
@@ -128,10 +129,12 @@ def _json_ready(value: Any) -> Any:
 
 class JsonlMetricLogger:
     def __init__(self, path: epath.PathLike):
-        self._path = epath.Path(path)
+        self._path = pathlib.Path(str(epath.Path(path)))
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.touch(exist_ok=True)
 
     def log(self, payload: dict[str, Any]) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._path.open("a") as f:
             f.write(json.dumps(_json_ready(payload), sort_keys=True) + "\n")
 

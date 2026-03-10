@@ -2284,13 +2284,14 @@ _CONFIGS = [
         )
     ),
     TrainConfig(
-        name="acot_challenge_generalist_lora_all",
+        name="acot_challenge_generalist_lora_generalist",
         model=_reasoning2action_lora_model(),
         data=_reasoning2action_data_config(
             _reasoning2action_repo_ids(
                 "pour_workpiece",
                 "open_door",
                 "scoop_popcorn",
+                "scoop_popcorn_part_2",
                 "hold_pot",
                 "place_block_into_box",
                 "take_wrong_item_shelf",
@@ -2299,11 +2300,12 @@ _CONFIGS = [
                 "sorting_packages_part_1",
                 "sorting_packages_part_2",
                 "sorting_packages_part_3",
+                "clean_the_desktop_addition",
                 "clean_the_desktop_part_1",
                 "clean_the_desktop_part_2",
             ),
             asset_id=os.getenv("ACOT_CHALLENGE_GENERALIST_ASSET_ID", "reasoning2action_sim_generalist"),
-            split_name="acot_challenge_generalist_lora_all",
+            split_name="acot_challenge_generalist_lora_generalist",
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=5_000,

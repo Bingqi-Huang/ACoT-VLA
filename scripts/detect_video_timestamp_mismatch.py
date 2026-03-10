@@ -7,6 +7,7 @@ fixed one-frame or multi-frame timing offsets that can cause item loading failur
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import re
 from collections import Counter, defaultdict
@@ -112,6 +113,12 @@ def parse_args() -> argparse.Namespace:
         help="Check every Nth timestamp.",
     )
     parser.add_argument(
+        "--max-checks-per-episode",
+        type=int,
+        default=None,
+        help="Stop after checking at most this many timestamps per episode.",
+    )
+    parser.add_argument(
         "--output-json",
         type=Path,
         default=None,
@@ -122,6 +129,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=10,
         help="Print progress every N scanned episodes. Set to 0 to disable periodic progress logs.",
+    )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="Number of worker threads to use across episodes.",
     )
     return parser.parse_args()
 
@@ -222,12 +235,15 @@ def summarize_episode_camera_seek(
     backend: str,
     scan_order: str,
     stride: int,
+    max_checks_per_episode: int | None,
 ) -> EpisodeCameraSummary | None:
     indices = np.arange(query_ts.size)
     if stride > 1:
         indices = indices[::stride]
     if scan_order == "tail":
         indices = indices[::-1]
+    if max_checks_per_episode is not None:
+        indices = indices[:max_checks_per_episode]
 
     checked = 0
     for row_index in indices:
@@ -257,6 +273,57 @@ def summarize_episode_camera_seek(
                 last_loaded_s=loaded_ts[0],
             )
     return None
+
+
+@dataclass(frozen=True)
+class EpisodeScanTask:
+    dataset_dir: str
+    episode_index: int
+    cameras: tuple[str, ...]
+    tolerance_s: float
+    backend: str
+    check_mode: str
+    scan_order: str
+    stride: int
+    max_checks_per_episode: int | None
+    fps: float
+    video_paths: dict[str, str]
+    data_path: str
+
+
+def _scan_episode(task: EpisodeScanTask) -> list[EpisodeCameraSummary]:
+    query_ts = load_episode_timestamps(Path(task.data_path))
+    summaries: list[EpisodeCameraSummary] = []
+    for camera_key in task.cameras:
+        video_path = Path(task.video_paths[camera_key])
+        if not video_path.is_file():
+            continue
+        if task.check_mode == "pts":
+            loaded_ts = load_video_pts(video_path, task.backend)
+            summary = summarize_episode_camera(
+                episode_index=task.episode_index,
+                camera_key=camera_key,
+                query_ts=query_ts,
+                loaded_ts=loaded_ts,
+                fps=task.fps,
+                tolerance_s=task.tolerance_s,
+            )
+        else:
+            summary = summarize_episode_camera_seek(
+                episode_index=task.episode_index,
+                camera_key=camera_key,
+                query_ts=query_ts,
+                video_path=video_path,
+                fps=task.fps,
+                tolerance_s=task.tolerance_s,
+                backend=task.backend,
+                scan_order=task.scan_order,
+                stride=task.stride,
+                max_checks_per_episode=task.max_checks_per_episode,
+            )
+        if summary is not None:
+            summaries.append(summary)
+    return summaries
 
 
 def decide_recommendation(
@@ -308,6 +375,8 @@ def scan_dataset(
     scan_order: str,
     stride: int,
     progress_every: int,
+    jobs: int,
+    max_checks_per_episode: int | None,
 ) -> dict[str, Any]:
     dataset_dir = dataset_dir.expanduser().resolve()
     meta = lerobot_dataset.LeRobotDatasetMetadata(dataset_dir.name, root=dataset_dir)
@@ -315,6 +384,7 @@ def scan_dataset(
     selected_episodes = episodes or list(range(meta.total_episodes))
     if max_episodes is not None:
         selected_episodes = selected_episodes[:max_episodes]
+    jobs = max(1, int(jobs))
 
     per_episode: list[EpisodeCameraSummary] = []
     camera_counter: Counter[str] = Counter()
@@ -325,65 +395,70 @@ def scan_dataset(
     if selected_episodes:
         print(
             f"Scanning {len(selected_episodes)} episodes x {len(selected_cameras)} camera(s) "
-            f"for `{dataset_dir.name}` with mode={check_mode}, backend={backend}...",
+            f"for `{dataset_dir.name}` with mode={check_mode}, backend={backend}, jobs={jobs}...",
             flush=True,
         )
 
-    for scanned_count, episode_index in enumerate(selected_episodes, start=1):
-        data_path = dataset_dir / meta.get_data_file_path(episode_index)
-        query_ts = load_episode_timestamps(data_path)
+    tasks = [
+        EpisodeScanTask(
+            dataset_dir=str(dataset_dir),
+            episode_index=episode_index,
+            cameras=tuple(selected_cameras),
+            tolerance_s=tolerance_s,
+            backend=backend,
+            check_mode=check_mode,
+            scan_order=scan_order,
+            stride=stride,
+            max_checks_per_episode=max_checks_per_episode,
+            fps=float(meta.fps),
+            video_paths={
+                camera_key: str(dataset_dir / meta.get_video_file_path(episode_index, camera_key))
+                for camera_key in selected_cameras
+            },
+            data_path=str(dataset_dir / meta.get_data_file_path(episode_index)),
+        )
+        for episode_index in selected_episodes
+    ]
 
-        for camera_key in selected_cameras:
-            video_path = dataset_dir / meta.get_video_file_path(episode_index, camera_key)
-            if not video_path.is_file():
-                continue
-            if check_mode == "pts":
-                loaded_ts = load_video_pts(video_path, backend)
-                summary = summarize_episode_camera(
-                    episode_index=episode_index,
-                    camera_key=camera_key,
-                    query_ts=query_ts,
-                    loaded_ts=loaded_ts,
-                    fps=float(meta.fps),
-                    tolerance_s=tolerance_s,
-                )
-            else:
-                summary = summarize_episode_camera_seek(
-                    episode_index=episode_index,
-                    camera_key=camera_key,
-                    query_ts=query_ts,
-                    video_path=video_path,
-                    fps=float(meta.fps),
-                    tolerance_s=tolerance_s,
-                    backend=backend,
-                    scan_order=scan_order,
-                    stride=stride,
-                )
-            if summary is None:
-                continue
-            per_episode.append(summary)
-            camera_counter[camera_key] += 1
-            camera_episode_counter[camera_key].add(episode_index)
-            for offset in summary.dominant_frame_offsets:
-                frame_offset_counter[offset] += 1
+    if jobs == 1:
+        episode_results_iter = (_scan_episode(task) for task in tasks)
+    else:
+        max_workers = min(jobs, len(tasks))
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        episode_results_iter = concurrent.futures.as_completed(
+            [executor.submit(_scan_episode, task) for task in tasks]
+        )
 
-        if progress_every > 0 and (
-            scanned_count == 1
-            or scanned_count == len(selected_episodes)
-            or scanned_count % progress_every == 0
-        ):
-            elapsed_s = time.monotonic() - started_at
-            rate = scanned_count / elapsed_s if elapsed_s > 0 else 0.0
-            remaining = len(selected_episodes) - scanned_count
-            eta_s = remaining / rate if rate > 0 else float("inf")
-            eta_str = f"{eta_s / 60:.1f}m" if np.isfinite(eta_s) else "unknown"
-            print(
-                f"[progress] {scanned_count}/{len(selected_episodes)} episodes "
-                f"({scanned_count / len(selected_episodes):.1%}), "
-                f"affected_so_far={len({item.episode_index for item in per_episode})}, "
-                f"elapsed={elapsed_s / 60:.1f}m, eta={eta_str}",
-                flush=True,
-            )
+    try:
+        for scanned_count, episode_result in enumerate(episode_results_iter, start=1):
+            summaries = episode_result.result() if jobs > 1 else episode_result
+            for summary in summaries:
+                per_episode.append(summary)
+                camera_counter[summary.camera_key] += 1
+                camera_episode_counter[summary.camera_key].add(summary.episode_index)
+                for offset in summary.dominant_frame_offsets:
+                    frame_offset_counter[offset] += 1
+
+            if progress_every > 0 and (
+                scanned_count == 1
+                or scanned_count == len(selected_episodes)
+                or scanned_count % progress_every == 0
+            ):
+                elapsed_s = time.monotonic() - started_at
+                rate = scanned_count / elapsed_s if elapsed_s > 0 else 0.0
+                remaining = len(selected_episodes) - scanned_count
+                eta_s = remaining / rate if rate > 0 else float("inf")
+                eta_str = f"{eta_s / 60:.1f}m" if np.isfinite(eta_s) else "unknown"
+                print(
+                    f"[progress] {scanned_count}/{len(selected_episodes)} episodes "
+                    f"({scanned_count / len(selected_episodes):.1%}), "
+                    f"affected_so_far={len({item.episode_index for item in per_episode})}, "
+                    f"elapsed={elapsed_s / 60:.1f}m, eta={eta_str}",
+                    flush=True,
+                )
+    finally:
+        if jobs > 1:
+            executor.shutdown(wait=True, cancel_futures=False)
 
     affected_episode_ids = sorted({item.episode_index for item in per_episode})
     result = {
@@ -432,6 +507,8 @@ def main() -> int:
         scan_order=args.scan_order,
         stride=args.stride,
         progress_every=args.progress_every,
+        jobs=args.jobs,
+        max_checks_per_episode=args.max_checks_per_episode,
     )
 
     print(f"Dataset: {result['dataset_name']}")

@@ -77,10 +77,19 @@ If architecture changes are made, the serving layer must still:
 - The baseline serving entrypoint is `scripts/serve_policy.py`.
 - The default Docker serving file is `scripts/docker/serve_policy.Dockerfile`.
 - Default server launch currently goes through `scripts/server.sh`.
+- The new fast-training path is additive only:
+  - training entrypoints: `scripts/train_fast.py`, `scripts/train_fast.sh`
+  - helper scripts: `scripts/precompute_subtask_index_cache.py`, `scripts/precompute_prompt_cache.py`
+  - fast loader: `src/openpi/training/data_loader_fast.py`
+  - it must not break or replace the legacy path built around `scripts/train.py` and `src/openpi/training/data_loader.py`
 - Inference in this repo loads a trained checkpoint directory containing:
   - `params`
   - `assets`
 - If training config changes, submission startup must point to the matching config and checkpoint.
+- Any new training acceleration path must preserve checkpoint compatibility with:
+  - validation during training
+  - `scripts/eval_offline.py`
+  - existing checkpoint-based serving / submission code
 - For the ICRA routed-serving path, the routing key is websocket `payload["task_name"]`, which is the evaluator `sub_task_name`.
 - Final submission routing must use only the documented public ICRA route keys. Do not rely on undocumented aliases such as `grab_toy`.
 - Dataset directories with suffixes such as `_part_2`, `_part_3`, etc. are storage shards of the same underlying task, not separate routed tasks.

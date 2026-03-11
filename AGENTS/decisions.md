@@ -116,3 +116,60 @@ Consequence:
 - All known shards for a task should be merged into that task family during training.
 - Specialist configs should use all shards of their task family, not a subset chosen only by folder naming.
 - Routing remains keyed by the single public task name, not by shard name.
+
+Date: 2026-03-11
+
+Decision:
+
+- Keep the new fast-training workflow strictly additive instead of modifying the existing `train.py` / legacy dataloader path.
+
+Why:
+
+- The repository already has a known-good training path for `acot_challenge_generalist_lora_generalist`.
+- User requirement for this round was explicit: do not break already working code.
+- This reduces rollback cost when testing aggressive training-path optimizations.
+
+Consequence:
+
+- Fast-path work should live under separate files such as `scripts/train_fast.py` and `src/openpi/training/data_loader_fast.py`.
+- Legacy checkpoint layout, eval scripts, and serving code remain the compatibility target.
+
+Date: 2026-03-11
+
+Decision:
+
+- Treat the current full-generalist steady-state bottleneck as primarily data-side video access / decode cost, not just `num_workers` misconfiguration.
+
+Why:
+
+- The dataset layout is highly fragmented:
+  - about 4179 parquet files
+  - about 12778 mp4 files
+  - each episode stored separately
+  - three camera videos per episode
+- Training-time reads require random episode-local parquet access plus random frame extraction from HEVC mp4 files.
+- On slower hardware (SATA SSD, older memory subsystem), GPU under-utilization and power sawtooth are consistent with decode / random-I/O stalls.
+
+Consequence:
+
+- Merely tuning `num_workers` is not expected to fully solve throughput problems.
+- High-value optimization directions are:
+  - precomputed sampler caches
+  - better episode-locality / decoder reuse
+  - offline training caches or resized sidecar video assets
+
+Date: 2026-03-11
+
+Decision:
+
+- For `acot_challenge_generalist_lora_generalist`, prompt-only token caching is not valid.
+
+Why:
+
+- This config uses `discrete_state_input=True`.
+- Prompt tokenization therefore depends on both prompt text and normalized state, not only prompt text.
+
+Consequence:
+
+- `scripts/precompute_prompt_cache.py` should refuse this config unless a state-aware cache design is added later.
+- The immediately useful fast-path cache for this config is the subtask-index cache, not prompt-token cache.

@@ -18,6 +18,50 @@ Immediate next step:
 
 ## Current Note
 
+Date: 2026-03-11
+
+Author: Codex
+
+What changed:
+
+- Added an additive fast-training path intended for `acot_challenge_generalist_lora_generalist` without modifying the legacy training path:
+  - `scripts/train_fast.py`
+  - `scripts/train_fast.sh`
+  - `src/openpi/training/data_loader_fast.py`
+  - `scripts/precompute_subtask_index_cache.py`
+  - `scripts/precompute_prompt_cache.py`
+- Documented fast-path usage in `Training_Notes.md`.
+- Added several fast-path stability fixes:
+  - strip metadata keys from device batches while keeping host metadata for logging
+  - isolate one-shot preview loader from the long-lived training iterator
+  - log preview images from host batches instead of device batches
+- Recorded the fast-path and data-layout conclusions in `AGENTS/constraints.md`, `AGENTS/decisions.md`, `AGENTS/experiments.md`, `AGENTS/runbook_training.md`, and `AGENTS/status.md`.
+
+What was verified:
+
+- Synthetic transform-parity check for `acot_challenge_generalist_lora_generalist` showed the additive fast loader matches the legacy transform order and key tensor outputs.
+- `python3 -m py_compile` passes for the current fast-path files.
+- Dataset inspection on `/ssd_workspace/huggingface/lerobot/Reasoning2Action-Sim` confirms the training set is highly fragmented and video-heavy:
+  - about `4179` parquet files
+  - about `12778` mp4 files
+  - per-episode parquet and per-camera mp4 layout
+  - HEVC video, including high-resolution wrist cameras
+
+What is still broken or unknown:
+
+- Multi-GPU startup / first-step latency remains unresolved.
+- Later user testing indicates that legacy `scripts/train.py` also stalls or compiles very slowly on dual GPU, so the remaining blocker is likely shared JAX/XLA multi-GPU behavior rather than a fast-loader-only bug.
+- Fast-path compatibility with validation, offline eval, and downstream checkpoint-serving is a design goal and partial code-level target, but not all combinations have been runtime-verified on target hardware.
+- For `acot_challenge_generalist_lora_generalist`, prompt-only token caching is intentionally unsupported because tokenization is state-dependent.
+
+Immediate next step:
+
+- Treat dual-GPU startup as a shared JAX/XLA issue and isolate it independently of the fast loader.
+- In parallel, choose the next throughput path:
+  - better online episode-locality / decoder-reuse loader
+  - or an offline resized-video / training-cache path
+  because the inspected dataset format strongly suggests that training throughput is bottlenecked by random video access and decode.
+
 Date: 2026-03-10
 
 Author: Codex

@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-03-10
+Last updated: 2026-03-11
 
 ## Current State
 
@@ -114,6 +114,37 @@ Last updated: 2026-03-10
 - Current code/doc mismatches are now explicit:
   - `src/openpi/policies/adapter_routed_policy.py` still carries the legacy alias `grab_toy -> place_block_into_box`
   - `acot_specialist_stock_shelf` and `acot_specialist_sorting` currently do not include all known shards of their task families, even though the full generalist config already includes `stock_and_straighten_shelf_part_2` and `sorting_packages_part_3`
+- Added an additive fast-training path for the full generalist workflow:
+  - `scripts/train_fast.py`
+  - `scripts/train_fast.sh`
+  - `src/openpi/training/data_loader_fast.py`
+  - `scripts/precompute_subtask_index_cache.py`
+  - `scripts/precompute_prompt_cache.py`
+- Fast-path implementation details now in repo:
+  - precomputed subtask-index cache support to reduce startup cost
+  - host-side metadata retention while stripping metadata from device batches
+  - preview-batch isolation so train-state initialization does not share the same long-lived data-prefetch iterator
+  - host-side preview image logging to avoid forcing early device-side image materialization for W&B
+- Fast-path transform parity for `acot_challenge_generalist_lora_generalist` was checked against the legacy transform chain on synthetic sample input:
+  - repack -> data transforms -> normalize -> model transforms
+  - `image`, `image_mask`, `state`, `actions`, `coarse_actions`, and tokenized prompt outputs matched
+- For `acot_challenge_generalist_lora_generalist`, prompt-only token caching is intentionally disabled because `discrete_state_input=True` makes tokenization state-dependent.
+- Generated fast-path cache outputs are intended to live under:
+  - `assets/<config>/fast_cache/`
+- Training docs now include fast-path usage instructions in:
+  - `Training_Notes.md`
+- Dataset layout has been inspected directly on the training root:
+  - dataset root around `173G`
+  - about `4179` parquet files
+  - about `12778` mp4 files
+  - videos stored per episode and per camera
+  - sample metadata shows HEVC video with high-resolution wrist cameras (`1056x1280`)
+- Current throughput diagnosis:
+  - on older storage / memory hardware, steady-state bottleneck is likely dominated by random episode access plus video decode cost, not only by an overly large `num_workers`
+- Current multi-GPU diagnosis:
+  - single-GPU runs on newer hardware appear healthy and can drive GPU power much higher
+  - dual-GPU startup / first-step latency is still unresolved
+  - because both legacy `scripts/train.py` and additive `scripts/train_fast.py` show similar behavior, the main issue is currently believed to be shared JAX/XLA multi-GPU initialization / compilation rather than a fast-loader-only defect
 
 ## Known Open Work
 
@@ -134,6 +165,15 @@ Last updated: 2026-03-10
   - `acot_specialist_sorting` should include `sorting_packages_part_1`, `sorting_packages_part_2`, and `sorting_packages_part_3`
 - Audit other task families for future `_part_*` shards and fold them into the same-task configs rather than creating new route keys.
 - Record one real end-to-end routed-serving validation run with extracted adapters so the routing path is validated beyond static code inspection.
+- Re-validate additive fast-path runtime behavior on the intended hardware, especially:
+  - startup time improvement from subtask-index caching
+  - compatibility with validation loader and `scripts/eval_offline.py`
+  - any mismatch between legacy and fast checkpoint loading paths
+- Determine whether the dual-GPU first-step stall is a JAX/XLA startup issue that also affects legacy `train.py`, or whether there is still a remaining fast-path-specific factor.
+- Decide whether the next throughput push should target:
+  - a better online dataloader with episode locality / decoder reuse
+  - an offline training cache / resized sidecar asset path
+- If offline training caches are added, keep them additive and preserve legacy checkpoint / inference compatibility.
 
 ## Verification Notes
 
@@ -142,6 +182,7 @@ Last updated: 2026-03-10
 - `python3 -m py_compile` passes for the new episode-split and validation files.
 - `python3 -m py_compile` passes for the new offline evaluation files and the added model hooks.
 - `python3 -m py_compile` passes for the new training logging changes in `scripts/train.py` and `src/openpi/training/data_loader.py`.
+- `python3 -m py_compile` passes for the additive fast-training files after the latest host-preview / train-init isolation changes.
 - `git diff --check` passes.
 - `uv run pytest ...` could not be completed in this environment because dependency resolution attempted network access and failed on DNS/package download.
 - Direct Python smoke execution of the new split helpers is currently blocked in this environment because the installed `ml_dtypes` version is too old for JAX import (`0.4.1`, JAX requires `>=0.5`).

@@ -59,23 +59,23 @@ def main(config: _config.TrainConfig):
     legacy_train.init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
     legacy_train.configure_wandb_metrics()
 
-    data_loader = _data_loader_fast.create_data_loader(
+    preview_loader = _data_loader_fast.create_data_loader(
         config,
         split="train",
         sharding=data_sharding,
         shuffle=True,
+        num_batches=1,
         prompt_cache_split="train",
     )
-    action_output_transform = legacy_train.build_action_output_transform(data_loader.data_config())
+    action_output_transform = legacy_train.build_action_output_transform(preview_loader.data_config())
     metrics_logger = legacy_train.JsonlMetricLogger(config.checkpoint_dir / "train_metrics.jsonl")
-    data_iter = iter(data_loader)
-    batch = next(data_iter)
-    batch_metadata = legacy_train._last_batch_metadata(data_loader)
-    legacy_train.logging.info(f"Initialized fast data loader:\n{training_utils.array_tree_to_info(batch)}")
+    preview_iter = iter(preview_loader)
+    preview_batch = next(preview_iter)
+    legacy_train.logging.info(f"Initialized fast data loader:\n{training_utils.array_tree_to_info(preview_batch)}")
 
     val_loader = None
     if config.val_interval is not None:
-        if data_loader.data_config().episode_split is None:
+        if preview_loader.data_config().episode_split is None:
             legacy_train.logging.warning("Validation requested but no episode split is configured; skipping validation.")
         else:
             val_loader = _data_loader_fast.create_data_loader(
@@ -89,8 +89,8 @@ def main(config: _config.TrainConfig):
             legacy_train.logging.info("Initialized fast validation loader with %d batches per evaluation.", config.val_num_batches)
 
     images_to_log = [
-        wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
-        for i in range(min(5, len(next(iter(batch[0].images.values())))))
+        wandb.Image(np.concatenate([np.array(img[i]) for img in preview_batch[0].images.values()], axis=1))
+        for i in range(min(5, len(next(iter(preview_batch[0].images.values())))))
     ]
     wandb.log({"camera_views": images_to_log}, step=0)
 
@@ -101,7 +101,26 @@ def main(config: _config.TrainConfig):
     legacy_train.logging.info(f"Total number of parameters: {num_params:,}")
 
     if resuming:
-        train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
+        train_data_loader = _data_loader_fast.create_data_loader(
+            config,
+            split="train",
+            sharding=data_sharding,
+            shuffle=True,
+            prompt_cache_split="train",
+        )
+        train_state = _checkpoints.restore_state(checkpoint_manager, train_state, train_data_loader)
+    else:
+        train_data_loader = _data_loader_fast.create_data_loader(
+            config,
+            split="train",
+            sharding=data_sharding,
+            shuffle=True,
+            prompt_cache_split="train",
+        )
+
+    data_iter = iter(train_data_loader)
+    batch = next(data_iter)
+    batch_metadata = legacy_train._last_batch_metadata(train_data_loader)
 
     trainable_params_sharding = sharding.fsdp_sharding(train_state.params.filter(config.trainable_filter), mesh)
     ptrain_batch_metrics = None
@@ -191,7 +210,7 @@ def main(config: _config.TrainConfig):
                 assert ptrain_step is not None
                 train_state, info = ptrain_step(train_rng, train_state, batch)
                 batch = next(data_iter)
-                batch_metadata = legacy_train._last_batch_metadata(data_loader)
+                batch_metadata = legacy_train._last_batch_metadata(train_data_loader)
             else:
                 accumulated_grads = None
                 total_loss = None
@@ -203,7 +222,7 @@ def main(config: _config.TrainConfig):
                     total_loss = loss if total_loss is None else total_loss + loss
                     accumulated_grads = grads if accumulated_grads is None else jax.tree.map(jnp.add, accumulated_grads, grads)
                     batch = next(data_iter)
-                    batch_metadata = legacy_train._last_batch_metadata(data_loader)
+                    batch_metadata = legacy_train._last_batch_metadata(train_data_loader)
 
                 assert accumulated_grads is not None
                 assert total_loss is not None

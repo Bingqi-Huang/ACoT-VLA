@@ -773,7 +773,21 @@ That work is still done at training time through the existing fast transform pat
 
 ### End-to-end workflow
 
-1. Build the cache once on the preprocessing machine.
+Recommended machine split:
+
+- preprocessing machine: U9
+- training machine: A100 box
+
+This split is supported.
+
+Recommended principle:
+
+- do the expensive raw-video decode and cache build on U9
+- do raw-vs-cache verification on U9 as well, because U9 definitely has the raw dataset
+- copy the built cache plus required metadata assets to the training machine
+- run `train_fast.py --r2a-cache-root ...` on the training machine
+
+1. On U9, build the cache once.
 
 ```bash
 export ACOT_CHALLENGE_DATA_ROOT=/path/to/Reasoning2Action-Sim
@@ -787,9 +801,7 @@ UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/build_reasoning2action_frame_
   --num-workers 16
 ```
 
-2. Copy the built cache directory to the training machine.
-
-3. Verify raw-vs-cache equivalence for a target config before real training.
+2. On U9, verify raw-vs-cache equivalence for a target config before copying.
 
 ```bash
 UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/verify_reasoning2action_frame_cache.py \
@@ -798,7 +810,15 @@ UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/verify_reasoning2action_frame
   --split train
 ```
 
-4. Compute norm stats from the cache if you want to avoid returning to raw video.
+3. On U9, if you want fully cache-based training on the training machine, also prepare the split/norm assets there.
+
+Episode split manifests can be created by running either the raw train path once up to split generation, or any command that touches the split manifest for the target config. The important files end up under:
+
+```bash
+assets/<config>/episode_splits/
+```
+
+If you want cache-only norm-stats generation, you can also compute stats now:
 
 ```bash
 UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/compute_norm_stats_fast.py \
@@ -807,7 +827,45 @@ UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/compute_norm_stats_fast.py \
   --split train
 ```
 
-5. Run fast training against the cache by adding `--r2a-cache-root`.
+4. Copy the built cache directory to the training machine.
+
+Recommended copy targets:
+
+- `/path/to/r2a-frame-cache`
+- `assets/acot_challenge_generalist_lora_generalist/episode_splits/`
+- any cache-based norm-stats output directory you computed on U9
+
+Example:
+
+```bash
+rsync -avP /path/to/r2a-frame-cache/ user@trainbox:/path/to/r2a-frame-cache/
+rsync -avP assets/acot_challenge_generalist_lora_generalist/episode_splits/ \
+  user@trainbox:/data/admins/bingqi/Projects/ACoT-VLA/assets/acot_challenge_generalist_lora_generalist/episode_splits/
+```
+
+5. On the training machine, set the same config family and point training at the copied cache.
+
+```bash
+export UV_CACHE_DIR=/tmp/uv-cache
+mkdir -p "${UV_CACHE_DIR}"
+```
+
+Important:
+
+- if the training machine does **not** have the raw `Reasoning2Action-Sim` dataset mounted, do **not** rely on `verify_reasoning2action_frame_cache.py` there
+- in that case, make sure the needed `assets/<config>/episode_splits/*.json` files already exist on the training machine
+- the cache-backed fast loader only needs the split manifests and the config repo basenames; it does not need to decode raw mp4 again during training
+
+6. If needed, compute norm stats from the copied cache on the training machine.
+
+```bash
+UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/compute_norm_stats_fast.py \
+  --config-name acot_challenge_generalist_lora_generalist \
+  --r2a-cache-root /path/to/r2a-frame-cache \
+  --split train
+```
+
+7. Run fast training against the cache by adding `--r2a-cache-root`.
 
 Debug run:
 

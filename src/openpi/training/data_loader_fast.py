@@ -272,9 +272,14 @@ class FastTorchDataLoader:
 
                 num_items += 1
                 self._last_host_batch = next_item
+                device_batch = {
+                    key: value
+                    for key, value in next_item.items()
+                    if key not in ("task", "episode_index", "frame_index")
+                }
                 yield jax.tree.map(
                     lambda x: jax.make_array_from_process_local_data(self._sharding, x),
-                    next_item,
+                    device_batch,
                 )
         finally:
             stop_event.set()

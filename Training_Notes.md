@@ -120,6 +120,13 @@ UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/build_reasoning2action_frame_
 
 This builds one reusable cache for the whole `Reasoning2Action-Sim` family, not only this config.
 
+Behavior of the builder:
+
+- it shows a per-sub-dataset progress bar while staging samples
+- it also shows a final `assemble` progress bar when merging staged repos into the final cache
+- it now supports resume at the sub-dataset level
+- if a run is interrupted, rerun the same command and already completed sub-datasets will be reused instead of rebuilt from the beginning
+
 ### 3. Verify the cache
 
 Before training, verify raw-vs-cache equivalence for this config:

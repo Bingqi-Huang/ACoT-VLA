@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Sequence
 import dataclasses
 import hashlib
 import json
 import logging
-import math
 import os
 import pathlib
 import re
+import shutil
 from typing import Any
 
 import numpy as np
 import torch
 from openpi_client import image_tools as client_image_tools
+import tqdm.auto as tqdm
 
 import openpi.models.model as _model
 import openpi.training.config as _config
@@ -42,6 +43,16 @@ _INDEX_FIELDS = (
     "shard_index",
     "shard_offset",
     "subtask_valid",
+)
+_REPO_STAGE_INDEX_FIELDS = (
+    "episode_index",
+    "frame_index",
+    "timestamp",
+    "subtask_valid",
+    "task",
+    "prompt",
+    "shard_index",
+    "shard_offset",
 )
 
 
@@ -109,6 +120,46 @@ class R2AFrameCacheManifest:
         }
 
 
+@dataclasses.dataclass(frozen=True)
+class RepoStageManifest:
+    repo_name: str
+    sample_count: int
+    shard_sizes: tuple[int, ...]
+    data_fields: tuple[FieldSpec, ...]
+    index_fields: tuple[FieldSpec, ...]
+    action_chunk_size: int
+    video_tolerance_s: float
+    data_root_fingerprint: str
+    complete: bool = True
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "RepoStageManifest":
+        return cls(
+            repo_name=str(payload["repo_name"]),
+            sample_count=int(payload["sample_count"]),
+            shard_sizes=tuple(int(x) for x in payload["shard_sizes"]),
+            data_fields=tuple(FieldSpec.from_dict(item) for item in payload["data_fields"]),
+            index_fields=tuple(FieldSpec.from_dict(item) for item in payload["index_fields"]),
+            action_chunk_size=int(payload["action_chunk_size"]),
+            video_tolerance_s=float(payload["video_tolerance_s"]),
+            data_root_fingerprint=str(payload["data_root_fingerprint"]),
+            complete=bool(payload.get("complete", True)),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "repo_name": self.repo_name,
+            "sample_count": self.sample_count,
+            "shard_sizes": list(self.shard_sizes),
+            "data_fields": [field.to_dict() for field in self.data_fields],
+            "index_fields": [field.to_dict() for field in self.index_fields],
+            "action_chunk_size": self.action_chunk_size,
+            "video_tolerance_s": self.video_tolerance_s,
+            "data_root_fingerprint": self.data_root_fingerprint,
+            "complete": self.complete,
+        }
+
+
 def manifest_path(cache_root: pathlib.Path) -> pathlib.Path:
     return cache_root / "manifest.json"
 
@@ -121,12 +172,36 @@ def shards_dir(cache_root: pathlib.Path) -> pathlib.Path:
     return cache_root / "shards"
 
 
+def build_state_dir(cache_root: pathlib.Path) -> pathlib.Path:
+    return cache_root / "_build_state"
+
+
+def staged_repos_dir(cache_root: pathlib.Path) -> pathlib.Path:
+    return build_state_dir(cache_root) / "repos"
+
+
+def staged_repo_dir(cache_root: pathlib.Path, repo_name: str) -> pathlib.Path:
+    return staged_repos_dir(cache_root) / repo_name
+
+
+def staged_repo_manifest_path(cache_root: pathlib.Path, repo_name: str) -> pathlib.Path:
+    return staged_repo_dir(cache_root, repo_name) / "repo_manifest.json"
+
+
 def index_array_path(cache_root: pathlib.Path, name: str) -> pathlib.Path:
     return index_dir(cache_root) / f"{_sanitize_name(name)}.npy"
 
 
+def staged_repo_index_path(cache_root: pathlib.Path, repo_name: str, name: str) -> pathlib.Path:
+    return staged_repo_dir(cache_root, repo_name) / "index" / f"{_sanitize_name(name)}.npy"
+
+
 def shard_field_path(cache_root: pathlib.Path, shard_index: int, name: str) -> pathlib.Path:
     return shards_dir(cache_root) / f"shard_{shard_index:06d}__{_sanitize_name(name)}.npy"
+
+
+def staged_repo_shard_path(cache_root: pathlib.Path, repo_name: str, shard_index: int, name: str) -> pathlib.Path:
+    return staged_repo_dir(cache_root, repo_name) / "shards" / f"shard_{shard_index:06d}__{_sanitize_name(name)}.npy"
 
 
 def supported_reasoning2action_configs(
@@ -196,6 +271,24 @@ def write_manifest(cache_root: pathlib.Path | str, manifest: R2AFrameCacheManife
     return path
 
 
+def load_repo_stage_manifest(cache_root: pathlib.Path | str, repo_name: str) -> RepoStageManifest | None:
+    path = staged_repo_manifest_path(pathlib.Path(cache_root), repo_name)
+    if not path.exists():
+        return None
+    return RepoStageManifest.from_dict(json.loads(path.read_text()))
+
+
+def write_repo_stage_manifest(
+    cache_root: pathlib.Path | str,
+    repo_name: str,
+    manifest: RepoStageManifest,
+) -> pathlib.Path:
+    path = staged_repo_manifest_path(pathlib.Path(cache_root), repo_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest.to_dict(), indent=2, sort_keys=True) + "\n")
+    return path
+
+
 def load_index_array(cache_root: pathlib.Path | str, name: str, *, mmap: bool = True) -> np.ndarray:
     mode = "r" if mmap else None
     return np.load(index_array_path(pathlib.Path(cache_root), name), mmap_mode=mode, allow_pickle=False)
@@ -232,7 +325,6 @@ def source_sample_to_cache_sample(
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
     prompt = _normalize_string(sample["prompt"])
     task = _normalize_string(sample["task"])
-
     shard_sample = {
         camera_key: client_image_tools.resize_with_pad(_ensure_uint8_hwc(sample[camera_key]), 224, 224)
         for camera_key in _CAMERA_KEYS
@@ -275,12 +367,7 @@ def create_reasoning2action_source_dataset(
 
 
 class _BuildDataset(torch.utils.data.Dataset):
-    def __init__(
-        self,
-        dataset: legacy_loader.Dataset,
-        *,
-        repo_name: str,
-    ):
+    def __init__(self, dataset: legacy_loader.Dataset, *, repo_name: str):
         self._dataset = dataset
         self._repo_name = repo_name
 
@@ -294,6 +381,257 @@ class _BuildDataset(torch.utils.data.Dataset):
 
 def _first_item(items):
     return items[0]
+
+
+class _RepoStageWriter:
+    def __init__(
+        self,
+        cache_root: pathlib.Path,
+        *,
+        repo_name: str,
+        shard_size: int,
+        action_chunk_size: int,
+        video_tolerance_s: float,
+        data_root_fingerprint: str,
+    ):
+        self._cache_root = cache_root
+        self._repo_name = repo_name
+        self._repo_dir = staged_repo_dir(cache_root, repo_name)
+        self._shard_size = shard_size
+        self._action_chunk_size = action_chunk_size
+        self._video_tolerance_s = video_tolerance_s
+        self._data_root_fingerprint = data_root_fingerprint
+
+        shutil.rmtree(self._repo_dir, ignore_errors=True)
+        (self._repo_dir / "index").mkdir(parents=True, exist_ok=True)
+        (self._repo_dir / "shards").mkdir(parents=True, exist_ok=True)
+
+        self._current_shard: dict[str, list[np.ndarray]] = {}
+        self._current_shard_size = 0
+        self._current_shard_index = 0
+        self._total_samples = 0
+        self._shard_sizes: list[int] = []
+        self._data_fields: tuple[FieldSpec, ...] | None = None
+        self._index_rows: dict[str, list[np.ndarray]] = {name: [] for name in _REPO_STAGE_INDEX_FIELDS}
+
+    def add_sample(
+        self,
+        sample: dict[str, np.ndarray],
+        metadata: dict[str, np.ndarray],
+        *,
+        subtask_valid: bool,
+    ) -> None:
+        if self._current_shard_size == 0:
+            self._current_shard = {name: [] for name in sample}
+        for name, value in sample.items():
+            self._current_shard.setdefault(name, []).append(np.asarray(value))
+        for name in ("episode_index", "frame_index", "timestamp"):
+            self._index_rows[name].append(np.asarray(metadata[name]))
+        self._index_rows["task"].append(np.asarray(metadata["task"]))
+        self._index_rows["prompt"].append(np.asarray(metadata["prompt"]))
+        self._index_rows["subtask_valid"].append(np.asarray(subtask_valid, dtype=np.bool_))
+        self._index_rows["shard_index"].append(np.asarray(self._current_shard_index, dtype=np.int32))
+        self._index_rows["shard_offset"].append(np.asarray(self._current_shard_size, dtype=np.int32))
+        self._current_shard_size += 1
+        self._total_samples += 1
+        if self._current_shard_size >= self._shard_size:
+            self.flush()
+
+    def flush(self) -> None:
+        if self._current_shard_size == 0:
+            return
+        stacked = {name: np.stack(values, axis=0) for name, values in self._current_shard.items()}
+        if self._data_fields is None:
+            self._data_fields = tuple(
+                FieldSpec(name=name, dtype=str(array.dtype), shape=tuple(array.shape[1:]))
+                for name, array in stacked.items()
+            )
+        for name, array in stacked.items():
+            np.save(
+                staged_repo_shard_path(self._cache_root, self._repo_name, self._current_shard_index, name),
+                array,
+                allow_pickle=False,
+            )
+        self._shard_sizes.append(self._current_shard_size)
+        self._current_shard_index += 1
+        self._current_shard = {}
+        self._current_shard_size = 0
+
+    def finalize(self) -> RepoStageManifest:
+        self.flush()
+        if self._data_fields is None:
+            raise RuntimeError(f"No samples were staged for repo {self._repo_name}")
+        index_arrays = {name: np.asarray(values) for name, values in self._index_rows.items()}
+        index_fields = tuple(
+            FieldSpec(name=name, dtype=str(array.dtype), shape=tuple(array.shape[1:]))
+            for name, array in index_arrays.items()
+        )
+        for name, array in index_arrays.items():
+            np.save(staged_repo_index_path(self._cache_root, self._repo_name, name), array, allow_pickle=False)
+        manifest = RepoStageManifest(
+            repo_name=self._repo_name,
+            sample_count=self._total_samples,
+            shard_sizes=tuple(self._shard_sizes),
+            data_fields=self._data_fields,
+            index_fields=index_fields,
+            action_chunk_size=self._action_chunk_size,
+            video_tolerance_s=self._video_tolerance_s,
+            data_root_fingerprint=self._data_root_fingerprint,
+            complete=True,
+        )
+        write_repo_stage_manifest(self._cache_root, self._repo_name, manifest)
+        return manifest
+
+
+def _stage_repo_cache(
+    *,
+    cache_root: pathlib.Path,
+    data_root: pathlib.Path,
+    repo_name: str,
+    shard_size: int,
+    num_workers: int,
+    action_chunk_size: int,
+    video_tolerance_s: float,
+    data_root_fingerprint: str,
+) -> RepoStageManifest:
+    existing = load_repo_stage_manifest(cache_root, repo_name)
+    if (
+        existing is not None
+        and existing.complete
+        and existing.action_chunk_size == action_chunk_size
+        and abs(existing.video_tolerance_s - video_tolerance_s) < 1e-9
+        and existing.data_root_fingerprint == data_root_fingerprint
+    ):
+        logger.info("Reusing staged repo cache for %s", repo_name)
+        return existing
+
+    repo_path = data_root / repo_name
+    logger.info("Building staged repo cache for %s", repo_path)
+    source_dataset = create_reasoning2action_source_dataset(
+        str(repo_path),
+        action_chunk_size=action_chunk_size,
+        video_tolerance_s=video_tolerance_s,
+    )
+    valid_indices = set(legacy_sampler.FrameSampler(source_dataset, "subtask", shuffle=False, seed=0).valid_indices)
+    loader = torch.utils.data.DataLoader(
+        _BuildDataset(source_dataset, repo_name=repo_name),
+        batch_size=1,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=_first_item,
+    )
+    writer = _RepoStageWriter(
+        cache_root,
+        repo_name=repo_name,
+        shard_size=shard_size,
+        action_chunk_size=action_chunk_size,
+        video_tolerance_s=video_tolerance_s,
+        data_root_fingerprint=data_root_fingerprint,
+    )
+    progress = tqdm.tqdm(total=len(source_dataset), desc=f"stage:{repo_name}", dynamic_ncols=True)
+    try:
+        for local_index, (sample, metadata) in enumerate(loader):
+            writer.add_sample(sample, metadata, subtask_valid=(local_index in valid_indices))
+            progress.update(1)
+    finally:
+        progress.close()
+    manifest = writer.finalize()
+    logger.info(
+        "Finished staged repo cache for %s: %d samples across %d shards",
+        repo_name,
+        manifest.sample_count,
+        len(manifest.shard_sizes),
+    )
+    return manifest
+
+
+def _assemble_final_cache(
+    *,
+    cache_root: pathlib.Path,
+    repo_names: Sequence[str],
+    repo_vocab: dict[str, int],
+    data_root_fingerprint: str,
+    action_chunk_size: int,
+) -> R2AFrameCacheManifest:
+    index_dir(cache_root).mkdir(parents=True, exist_ok=True)
+    shards_dir(cache_root).mkdir(parents=True, exist_ok=True)
+    prompt_vocab: dict[str, int] = {}
+    task_vocab: dict[str, int] = {}
+    index_rows: dict[str, list[np.ndarray]] = {name: [] for name in _INDEX_FIELDS}
+    shard_sizes: list[int] = []
+    data_fields: tuple[FieldSpec, ...] | None = None
+    global_shard_offset = 0
+    total_samples = 0
+
+    progress = tqdm.tqdm(repo_names, desc="assemble", dynamic_ncols=True)
+    try:
+        for repo_name in progress:
+            repo_manifest = load_repo_stage_manifest(cache_root, repo_name)
+            if repo_manifest is None or not repo_manifest.complete:
+                raise RuntimeError(f"Missing staged repo cache for {repo_name}")
+            if data_fields is None:
+                data_fields = repo_manifest.data_fields
+
+            local_indices = {
+                name: np.load(staged_repo_index_path(cache_root, repo_name, name), mmap_mode="r", allow_pickle=False)
+                for name in _REPO_STAGE_INDEX_FIELDS
+            }
+            prompt_strings = [_normalize_string(v) for v in local_indices["prompt"]]
+            task_strings = [_normalize_string(v) for v in local_indices["task"]]
+
+            index_rows["prompt_index"].append(
+                np.asarray([prompt_vocab.setdefault(v, len(prompt_vocab)) for v in prompt_strings], dtype=np.int32)
+            )
+            index_rows["task_index"].append(
+                np.asarray([task_vocab.setdefault(v, len(task_vocab)) for v in task_strings], dtype=np.int32)
+            )
+            index_rows["repo_index"].append(np.full(repo_manifest.sample_count, repo_vocab[repo_name], dtype=np.int32))
+            index_rows["episode_index"].append(np.asarray(local_indices["episode_index"], dtype=np.int32))
+            index_rows["frame_index"].append(np.asarray(local_indices["frame_index"], dtype=np.int32))
+            index_rows["timestamp"].append(np.asarray(local_indices["timestamp"], dtype=np.float32))
+            index_rows["subtask_valid"].append(np.asarray(local_indices["subtask_valid"], dtype=np.bool_))
+            index_rows["shard_index"].append(np.asarray(local_indices["shard_index"], dtype=np.int32) + global_shard_offset)
+            index_rows["shard_offset"].append(np.asarray(local_indices["shard_offset"], dtype=np.int32))
+
+            for local_shard_index, shard_size in enumerate(repo_manifest.shard_sizes):
+                for field in repo_manifest.data_fields:
+                    shutil.copy2(
+                        staged_repo_shard_path(cache_root, repo_name, local_shard_index, field.name),
+                        shard_field_path(cache_root, global_shard_offset + local_shard_index, field.name),
+                    )
+                shard_sizes.append(int(shard_size))
+
+            global_shard_offset += len(repo_manifest.shard_sizes)
+            total_samples += repo_manifest.sample_count
+    finally:
+        progress.close()
+
+    if data_fields is None:
+        raise RuntimeError("No staged repo caches were found for final assembly.")
+
+    stacked_indices = {name: np.concatenate(values, axis=0) for name, values in index_rows.items()}
+    index_fields = tuple(
+        FieldSpec(name=name, dtype=str(array.dtype), shape=tuple(array.shape[1:]))
+        for name, array in stacked_indices.items()
+    )
+    for name, array in stacked_indices.items():
+        np.save(index_array_path(cache_root, name), array, allow_pickle=False)
+
+    manifest = R2AFrameCacheManifest(
+        version=_CACHE_VERSION,
+        dataset_family=_CACHE_FAMILY,
+        data_root_fingerprint=data_root_fingerprint,
+        max_action_chunk_size=action_chunk_size,
+        repo_names=tuple(repo_names),
+        task_vocab=tuple(v for v, _ in sorted(task_vocab.items(), key=lambda item: item[1])),
+        prompt_vocab=tuple(v for v, _ in sorted(prompt_vocab.items(), key=lambda item: item[1])),
+        data_fields=data_fields,
+        index_fields=index_fields,
+        shard_sizes=tuple(shard_sizes),
+        sample_count=total_samples,
+    )
+    write_manifest(cache_root, manifest)
+    return manifest
 
 
 class R2AFrameCacheDataset:
@@ -317,7 +655,6 @@ class R2AFrameCacheDataset:
         self._prompt_vocab = list(self._manifest.prompt_vocab)
         self._repo_names = list(self._manifest.repo_names)
         self._repo_name_to_index = {name: idx for idx, name in enumerate(self._repo_names)}
-
         self._index_arrays = {name: load_index_array(self._cache_root, name) for name in _INDEX_FIELDS}
         self._selected_indices = self._build_selected_indices()
         self._shard_cache: OrderedDict[int, dict[str, np.ndarray]] = OrderedDict()
@@ -326,14 +663,13 @@ class R2AFrameCacheDataset:
         return int(self._selected_indices.shape[0])
 
     def __getitem__(self, index: int) -> dict[str, Any]:
-        local_index = int(index)
-        sample_index = int(self._selected_indices[local_index])
+        sample_index = int(self._selected_indices[int(index)])
         shard_index = int(self._index_arrays["shard_index"][sample_index])
         shard_offset = int(self._index_arrays["shard_offset"][sample_index])
         shard_arrays = self._load_shard(shard_index)
-
         task_index = int(self._index_arrays["task_index"][sample_index])
         prompt_index = int(self._index_arrays["prompt_index"][sample_index])
+
         sample = {
             "observation.state": np.asarray(shard_arrays["observation.state"][shard_offset]),
             "action": np.asarray(shard_arrays["action"][shard_offset]),
@@ -391,7 +727,6 @@ class R2AFrameCacheDataset:
                     continue
                 repo_mask &= np.isin(episode_array, episodes)
             selected_parts.append(np.flatnonzero(repo_mask).astype(np.int64))
-
         if not selected_parts:
             return np.asarray([], dtype=np.int64)
         return np.concatenate(selected_parts, axis=0)
@@ -425,11 +760,16 @@ def build_reasoning2action_frame_cache(
 ) -> R2AFrameCacheManifest:
     cache_root = pathlib.Path(cache_root)
     data_root = pathlib.Path(data_root or os.path.expanduser(_config._REASONING2ACTION_DATA_ROOT)).expanduser().resolve()
-
     repo_names = supported_reasoning2action_repo_names(data_root=data_root)
+    data_root_fingerprint = _fingerprint_data_root(data_root, repo_names)
+
+    if manifest_path(cache_root).exists():
+        existing_manifest = load_manifest(cache_root)
+        if existing_manifest.data_root_fingerprint == data_root_fingerprint:
+            logger.info("Reasoning2Action frame cache already complete at %s", cache_root)
+            return existing_manifest
+
     repo_vocab = {repo_name: idx for idx, repo_name in enumerate(repo_names)}
-    prompt_vocab: dict[str, int] = {}
-    task_vocab: dict[str, int] = {}
     action_chunk_size = max_reasoning2action_action_chunk_size(data_root=data_root)
     video_tolerance_s = max(
         float(getattr(train_config.data.base_config, "video_tolerance_s", 1e-4) or 1e-4)
@@ -437,131 +777,37 @@ def build_reasoning2action_frame_cache(
     )
 
     cache_root.mkdir(parents=True, exist_ok=True)
-    index_dir(cache_root).mkdir(parents=True, exist_ok=True)
-    shards_dir(cache_root).mkdir(parents=True, exist_ok=True)
+    build_state_dir(cache_root).mkdir(parents=True, exist_ok=True)
+    staged_repos_dir(cache_root).mkdir(parents=True, exist_ok=True)
 
-    shard_sizes: list[int] = []
-    shard_rows: list[dict[str, list[np.ndarray]]] = []
-    index_rows: dict[str, list[np.ndarray]] = {name: [] for name in _INDEX_FIELDS if name not in ("shard_index", "shard_offset")}
-    shard_index_rows: list[np.ndarray] = []
-    shard_offset_rows: list[np.ndarray] = []
-    data_fields: tuple[FieldSpec, ...] | None = None
-
-    current_shard: dict[str, list[np.ndarray]] = {}
-    current_shard_size = 0
-    current_shard_index = 0
-    total_samples = 0
-
-    def flush_current_shard() -> None:
-        nonlocal current_shard, current_shard_size, current_shard_index, data_fields
-        if current_shard_size == 0:
-            return
-
-        shard_sizes.append(current_shard_size)
-        shard_offset_rows.append(np.arange(current_shard_size, dtype=np.int32))
-        shard_index_rows.append(np.full(current_shard_size, current_shard_index, dtype=np.int32))
-
-        stacked = {
-            name: np.stack(values, axis=0)
-            for name, values in current_shard.items()
-        }
-        if data_fields is None:
-            data_fields = tuple(
-                FieldSpec(name=name, dtype=str(array.dtype), shape=tuple(array.shape[1:]))
-                for name, array in stacked.items()
+    repo_progress = tqdm.tqdm(repo_names, desc="stage-repos", dynamic_ncols=True)
+    try:
+        for repo_name in repo_progress:
+            _stage_repo_cache(
+                cache_root=cache_root,
+                data_root=data_root,
+                repo_name=repo_name,
+                shard_size=shard_size,
+                num_workers=num_workers,
+                action_chunk_size=action_chunk_size,
+                video_tolerance_s=video_tolerance_s,
+                data_root_fingerprint=data_root_fingerprint,
             )
+    finally:
+        repo_progress.close()
 
-        for name, array in stacked.items():
-            np.save(shard_field_path(cache_root, current_shard_index, name), array, allow_pickle=False)
-
-        current_shard_index += 1
-        current_shard = {}
-        current_shard_size = 0
-
-    for repo_name in repo_names:
-        repo_path = data_root / repo_name
-        logger.info("Building cache for repo: %s", repo_path)
-        source_dataset = create_reasoning2action_source_dataset(
-            str(repo_path),
-            action_chunk_size=action_chunk_size,
-            video_tolerance_s=video_tolerance_s,
-        )
-        valid_indices = legacy_sampler.FrameSampler(source_dataset, "subtask", shuffle=False, seed=0).valid_indices
-        valid_index_set = set(valid_indices)
-
-        build_dataset = _BuildDataset(
-            source_dataset,
-            repo_name=repo_name,
-        )
-        loader = torch.utils.data.DataLoader(
-            build_dataset,
-            batch_size=1,
-            shuffle=False,
-            num_workers=num_workers,
-            collate_fn=_first_item,
-        )
-        for local_index, item in enumerate(loader):
-            sample, metadata = item
-            if current_shard_size == 0:
-                current_shard = {name: [] for name in sample}
-            for name, value in sample.items():
-                current_shard.setdefault(name, []).append(np.asarray(value))
-            prompt = _normalize_string(metadata.pop("prompt"))
-            task = _normalize_string(metadata.pop("task"))
-            repo_name = _normalize_string(metadata.pop("repo_name"))
-            index_rows["prompt_index"].append(np.int32(prompt_vocab.setdefault(prompt, len(prompt_vocab))))
-            index_rows["task_index"].append(np.int32(task_vocab.setdefault(task, len(task_vocab))))
-            index_rows["repo_index"].append(np.int32(repo_vocab[repo_name]))
-            for name, value in metadata.items():
-                index_rows[name].append(np.asarray(value))
-            index_rows["subtask_valid"].append(np.asarray(local_index in valid_index_set, dtype=np.bool_))
-            current_shard_size += 1
-            total_samples += 1
-
-            if current_shard_size >= shard_size:
-                flush_current_shard()
-
-    flush_current_shard()
-
-    if data_fields is None:
-        raise RuntimeError("No Reasoning2Action samples were written to the cache.")
-
-    stacked_indices = {
-        name: np.asarray(values)
-        for name, values in index_rows.items()
-    }
-    stacked_indices["shard_index"] = np.concatenate(shard_index_rows, axis=0)
-    stacked_indices["shard_offset"] = np.concatenate(shard_offset_rows, axis=0)
-
-    if any(array.shape[0] != total_samples for array in stacked_indices.values()):
-        raise RuntimeError("Index array length mismatch while building R2A frame cache.")
-
-    index_fields = tuple(
-        FieldSpec(name=name, dtype=str(array.dtype), shape=tuple(array.shape[1:]))
-        for name, array in stacked_indices.items()
+    manifest = _assemble_final_cache(
+        cache_root=cache_root,
+        repo_names=repo_names,
+        repo_vocab=repo_vocab,
+        data_root_fingerprint=data_root_fingerprint,
+        action_chunk_size=action_chunk_size,
     )
-    for name, array in stacked_indices.items():
-        np.save(index_array_path(cache_root, name), array, allow_pickle=False)
-
-    manifest = R2AFrameCacheManifest(
-        version=_CACHE_VERSION,
-        dataset_family=_CACHE_FAMILY,
-        data_root_fingerprint=_fingerprint_data_root(data_root, repo_names),
-        max_action_chunk_size=action_chunk_size,
-        repo_names=tuple(repo_names),
-        task_vocab=tuple(prompt for prompt, _ in sorted(task_vocab.items(), key=lambda item: item[1])),
-        prompt_vocab=tuple(prompt for prompt, _ in sorted(prompt_vocab.items(), key=lambda item: item[1])),
-        data_fields=data_fields,
-        index_fields=index_fields,
-        shard_sizes=tuple(shard_sizes),
-        sample_count=total_samples,
-    )
-    write_manifest(cache_root, manifest)
     logger.info(
         "Built Reasoning2Action frame cache at %s with %d samples across %d shards.",
         cache_root,
-        total_samples,
-        len(shard_sizes),
+        manifest.sample_count,
+        len(manifest.shard_sizes),
     )
     return manifest
 

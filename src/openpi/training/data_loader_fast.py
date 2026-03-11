@@ -15,6 +15,7 @@ import torch
 import openpi.models.model as _model
 import openpi.training.config as _config
 import openpi.training.data_loader as legacy_loader
+import openpi.training.data_loader_fast_r2a as r2a_fast_loader
 import openpi.training.sampler as legacy_sampler
 import openpi.transforms as _transforms
 
@@ -23,12 +24,17 @@ def fast_cache_dir(train_config: _config.TrainConfig) -> pathlib.Path:
     return train_config.assets_dirs / "fast_cache"
 
 
-def subtask_index_cache_path(train_config: _config.TrainConfig, split: str) -> pathlib.Path:
-    return fast_cache_dir(train_config) / f"{train_config.name}_{split}_subtask_indices.npy"
+def subtask_index_cache_path(train_config: _config.TrainConfig, split: str, *, source_tag: str = "raw") -> pathlib.Path:
+    return fast_cache_dir(train_config) / f"{train_config.name}_{split}_{source_tag}_subtask_indices.npy"
 
 
-def subtask_index_metadata_path(train_config: _config.TrainConfig, split: str) -> pathlib.Path:
-    return fast_cache_dir(train_config) / f"{train_config.name}_{split}_subtask_indices.meta.json"
+def subtask_index_metadata_path(
+    train_config: _config.TrainConfig,
+    split: str,
+    *,
+    source_tag: str = "raw",
+) -> pathlib.Path:
+    return fast_cache_dir(train_config) / f"{train_config.name}_{split}_{source_tag}_subtask_indices.meta.json"
 
 
 def prompt_token_cache_path(train_config: _config.TrainConfig, split: str) -> pathlib.Path:
@@ -286,14 +292,21 @@ class FastTorchDataLoader:
             producer_thread.join(timeout=1.0)
 
 
-def load_cached_subtask_indices(train_config: _config.TrainConfig, split: str) -> np.ndarray | None:
-    cache_path = subtask_index_cache_path(train_config, split)
-    metadata_path = subtask_index_metadata_path(train_config, split)
+def load_cached_subtask_indices(
+    train_config: _config.TrainConfig,
+    split: str,
+    *,
+    source_tag: str = "raw",
+) -> np.ndarray | None:
+    cache_path = subtask_index_cache_path(train_config, split, source_tag=source_tag)
+    metadata_path = subtask_index_metadata_path(train_config, split, source_tag=source_tag)
     if not cache_path.exists() or not metadata_path.exists():
         return None
 
     metadata = json.loads(metadata_path.read_text())
     if metadata.get("config_name") != train_config.name or metadata.get("split") != split:
+        return None
+    if metadata.get("source_tag") != source_tag:
         return None
     return np.load(cache_path, mmap_mode="r")
 
@@ -304,17 +317,19 @@ def save_cached_subtask_indices(
     indices: Sequence[int],
     *,
     dataset_size: int,
+    source_tag: str = "raw",
 ) -> pathlib.Path:
     cache_dir = fast_cache_dir(train_config)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = subtask_index_cache_path(train_config, split)
-    metadata_path = subtask_index_metadata_path(train_config, split)
+    cache_path = subtask_index_cache_path(train_config, split, source_tag=source_tag)
+    metadata_path = subtask_index_metadata_path(train_config, split, source_tag=source_tag)
     np.save(cache_path, np.asarray(indices, dtype=np.int64))
     metadata_path.write_text(
         json.dumps(
             {
                 "config_name": train_config.name,
                 "split": split,
+                "source_tag": source_tag,
                 "dataset_size": int(dataset_size),
                 "num_indices": int(len(indices)),
             },
@@ -348,31 +363,46 @@ def create_data_loader(
     use_cached_subtask_indices: bool = True,
     prompt_cache_split: str | None = None,
     prefetch_batches: int = 2,
+    r2a_cache_root: pathlib.Path | str | None = None,
 ):
     data_config = config.data.create(config.assets_dirs, config.model)
     if data_config.rlds_data_dir is not None:
         raise NotImplementedError("Fast data loader currently supports only the LeRobot path.")
 
-    raw_dataset = legacy_loader.create_torch_dataset(
-        data_config,
-        config.model,
-        split=split,
-        split_base_dir=config.assets_dirs / "episode_splits",
-    )
-    raw_dataset = legacy_loader.SafeDataset(raw_dataset)
+    if r2a_cache_root is None:
+        raw_dataset = legacy_loader.create_torch_dataset(
+            data_config,
+            config.model,
+            split=split,
+            split_base_dir=config.assets_dirs / "episode_splits",
+        )
+        raw_dataset = legacy_loader.SafeDataset(raw_dataset)
+        subtask_source_tag = "raw"
+    else:
+        raw_dataset = r2a_fast_loader.create_cache_backed_dataset(
+            pathlib.Path(r2a_cache_root),
+            data_config,
+            config.model,
+            split=split,
+            split_base_dir=config.assets_dirs / "episode_splits",
+        )
+        subtask_source_tag = "r2a_cache"
 
     sampler = None
     if data_config.dataloader_sampler:
         indices = None
         if use_cached_subtask_indices:
-            indices = load_cached_subtask_indices(config, split)
+            indices = load_cached_subtask_indices(config, split, source_tag=subtask_source_tag)
         if indices is None:
-            indices = build_subtask_indices(
-                raw_dataset,
-                sampler_type=data_config.dataloader_sampler,
-                shuffle=shuffle,
-                seed=config.seed,
-            )
+            if r2a_cache_root is None:
+                indices = build_subtask_indices(
+                    raw_dataset,
+                    sampler_type=data_config.dataloader_sampler,
+                    shuffle=shuffle,
+                    seed=config.seed,
+                )
+            else:
+                indices = r2a_fast_loader.build_cached_subtask_indices(raw_dataset)
         sampler = CachedIndexSampler(indices, shuffle=shuffle, seed=config.seed)
         shuffle = False
 

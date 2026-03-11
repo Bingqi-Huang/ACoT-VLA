@@ -45,7 +45,7 @@ def _host_preview_images(data_loader, batch) -> list[wandb.Image]:
     ]
 
 
-def main(config: _config.TrainConfig):
+def main(config: _config.TrainConfig, *, r2a_cache_root: pathlib.Path | None = None):
     legacy_train.init_logging()
     legacy_train.logging.info(f"Running on: {platform.node()}")
 
@@ -83,6 +83,7 @@ def main(config: _config.TrainConfig):
         shuffle=True,
         num_batches=1,
         prompt_cache_split="train",
+        r2a_cache_root=r2a_cache_root,
     )
     action_output_transform = legacy_train.build_action_output_transform(preview_loader.data_config())
     metrics_logger = legacy_train.JsonlMetricLogger(config.checkpoint_dir / "train_metrics.jsonl")
@@ -102,6 +103,7 @@ def main(config: _config.TrainConfig):
                 shuffle=False,
                 num_batches=config.val_num_batches,
                 prompt_cache_split="val",
+                r2a_cache_root=r2a_cache_root,
             )
             legacy_train.logging.info("Initialized fast validation loader with %d batches per evaluation.", config.val_num_batches)
 
@@ -121,6 +123,7 @@ def main(config: _config.TrainConfig):
             sharding=data_sharding,
             shuffle=True,
             prompt_cache_split="train",
+            r2a_cache_root=r2a_cache_root,
         )
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, train_data_loader)
     else:
@@ -130,6 +133,7 @@ def main(config: _config.TrainConfig):
             sharding=data_sharding,
             shuffle=True,
             prompt_cache_split="train",
+            r2a_cache_root=r2a_cache_root,
         )
 
     data_iter = iter(train_data_loader)
@@ -328,5 +332,28 @@ def main(config: _config.TrainConfig):
     checkpoint_manager.wait_until_finished()
 
 
+def _parse_r2a_cache_root(argv: list[str]) -> tuple[list[str], pathlib.Path | None]:
+    remaining: list[str] = []
+    cache_root: pathlib.Path | None = None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--r2a-cache-root":
+            if i + 1 >= len(argv):
+                raise ValueError("--r2a-cache-root requires a value")
+            cache_root = pathlib.Path(argv[i + 1]).expanduser()
+            i += 2
+            continue
+        if arg.startswith("--r2a-cache-root="):
+            cache_root = pathlib.Path(arg.split("=", 1)[1]).expanduser()
+            i += 1
+            continue
+        remaining.append(arg)
+        i += 1
+    return remaining, cache_root
+
+
 if __name__ == "__main__":
-    main(_config.cli())
+    cli_args, cache_root = _parse_r2a_cache_root(sys.argv[1:])
+    sys.argv = [sys.argv[0], *cli_args]
+    main(_config.cli(), r2a_cache_root=cache_root)

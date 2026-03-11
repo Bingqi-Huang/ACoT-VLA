@@ -1343,10 +1343,10 @@ _REASONING2ACTION_SPECIALIST_SPECS: tuple[tuple[str, tuple[str, ...], tuple[str,
     ("acot_specialist_take_wrong_item", ("take_wrong_item_shelf",), ("Remove misplaced beverages from shelves",)),
     (
         "acot_specialist_stock_shelf",
-        ("stock_and_straighten_shelf",),
+        ("stock_and_straighten_shelf","stock_and_straighten_shelf_part_2"),
         ("Stock supermarket shelves  \nStraighten products  \nAttend ICRA conference  \nOperate SIM card",),
     ),
-    ("acot_specialist_sorting", ("sorting_packages_part_1", "sorting_packages_part_2"), ("Sort packages",)),
+    ("acot_specialist_sorting", ("sorting_packages_part_1", "sorting_packages_part_2", "sorting_packages_part_3"), ("Sort packages",)),
     ("acot_specialist_clean_desktop", ("clean_the_desktop_part_1", "clean_the_desktop_part_2"), ("Clear the desktop",)),
 )
 

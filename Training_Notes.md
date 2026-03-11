@@ -55,6 +55,220 @@ export UV_CACHE_DIR=/tmp/uv-cache
 mkdir -p "${UV_CACHE_DIR}"
 ```
 
+## Fast path for `acot_challenge_generalist_lora_generalist`
+
+The repo now has an **additive fast training path** for the full generalist run.
+
+It does **not** replace the old path:
+
+- old path: `scripts/train.py` and `scripts/train.sh`
+- new fast path: `scripts/train_fast.py` and `scripts/train_fast.sh`
+
+This means:
+
+- old checkpoints stay valid
+- old eval / serve code stays valid
+- if the fast path fails, you can immediately fall back to the old path
+
+The fast path currently improves the training path in three places:
+
+1. it can reuse a precomputed `subtask` sampler index cache instead of rebuilding the full frame index list every launch
+2. it avoids the old multi-worker data-loader path and runs a single-process prefetch path instead
+3. it uses a fused training-step path when `grad_accum_steps=1`
+
+### Fast path scope and current caveat
+
+This fast path is currently intended for:
+
+```text
+acot_challenge_generalist_lora_generalist
+```
+
+Important caveat for this config:
+
+- the model uses `discrete_state_input=True`
+- prompt tokenization therefore depends on both `prompt` and `state`
+- because of that, the prompt-only cache script is **not valid** for this config
+- `scripts/precompute_prompt_cache.py` will intentionally refuse to run for this config
+
+So for the current full generalist run, the relevant optimization is:
+
+- precompute `subtask` indices
+- then train through `train_fast.py`
+
+### 1. Prepare the same environment as the normal path
+
+```bash
+export ACOT_CHALLENGE_DATA_ROOT=/ssd_workspace/huggingface/lerobot/Reasoning2Action-Sim
+export UV_CACHE_DIR=/tmp/uv-cache
+mkdir -p "${UV_CACHE_DIR}"
+```
+
+Optional:
+
+```bash
+export ACOT_CHALLENGE_INIT_WEIGHTS=/data/admins/bingqi/Projects/ACoT-VLA/checkpoints/baseline_checkpoint/params
+export ACOT_CHALLENGE_VIDEO_TOLERANCE_S=0.15
+```
+
+If metadata cleanup has not been done yet:
+
+```bash
+uv run ./scripts/cleanup_depth_metadata.py "$ACOT_CHALLENGE_DATA_ROOT"
+```
+
+### 2. Compute norm stats first
+
+The fast path still uses the same data config and the same norm stats as the old path.
+
+```bash
+uv run python scripts/compute_norm_stats.py \
+    --config-name acot_challenge_generalist_lora_generalist \
+    --split train
+```
+
+### 3. Precompute the `subtask` index cache
+
+This is the main startup optimization for the current generalist config.
+
+Train split:
+
+```bash
+uv run python scripts/precompute_subtask_index_cache.py \
+    --config-name acot_challenge_generalist_lora_generalist \
+    --split train
+```
+
+Validation split:
+
+```bash
+uv run python scripts/precompute_subtask_index_cache.py \
+    --config-name acot_challenge_generalist_lora_generalist \
+    --split val
+```
+
+Expected output location:
+
+```bash
+assets/acot_challenge_generalist_lora_generalist/fast_cache/
+```
+
+Expected files:
+
+- `acot_challenge_generalist_lora_generalist_train_subtask_indices.npy`
+- `acot_challenge_generalist_lora_generalist_train_subtask_indices.meta.json`
+- `acot_challenge_generalist_lora_generalist_val_subtask_indices.npy`
+- `acot_challenge_generalist_lora_generalist_val_subtask_indices.meta.json`
+
+### 4. Do a short fast-path debug run
+
+Run a short debug job before the real training:
+
+```bash
+DEBUG_MODE=true uv run python scripts/train_fast.py \
+    acot_challenge_generalist_lora_generalist \
+    --exp_name generalist_v1_bs96_fast_debug \
+    --overwrite
+```
+
+What to check:
+
+- training starts normally
+- first batch is built successfully
+- loss logs appear
+- checkpoint writing still works
+- `train_metrics.jsonl` is written under the checkpoint dir
+
+### 5. Run the real fast-path training job
+
+Shell wrapper:
+
+```bash
+bash scripts/train_fast.sh \
+  acot_challenge_generalist_lora_generalist \
+  generalist_v1_bs96_fast \
+  --val-interval=1000 \
+  --val-num-batches=8
+```
+
+Direct Python entry:
+
+```bash
+uv run python scripts/train_fast.py \
+    acot_challenge_generalist_lora_generalist \
+    --exp_name generalist_v1_bs96_fast \
+    --val-interval=1000 \
+    --val-num-batches=8
+```
+
+If resuming an interrupted fast-path run:
+
+```bash
+uv run python scripts/train_fast.py \
+    acot_challenge_generalist_lora_generalist \
+    --exp_name generalist_v1_bs96_fast \
+    --resume=true
+```
+
+If you want to discard an old fast-path run and restart from scratch:
+
+```bash
+uv run python scripts/train_fast.py \
+    acot_challenge_generalist_lora_generalist \
+    --exp_name generalist_v1_bs96_fast \
+    --overwrite
+```
+
+### 6. What remains compatible with the old path
+
+The fast path is intentionally additive, so the outputs are meant to stay usable by the existing tooling:
+
+- checkpoint layout stays under `./checkpoints/<config>/<exp_name>/`
+- `train_metrics.jsonl` is still written in the checkpoint root
+- old offline eval scripts can still read the produced checkpoint
+- old checkpoint serving path can still load the produced checkpoint
+
+So if a fast-path training run produces the best checkpoint, you can keep using the usual downstream flow.
+
+### 7. Recommended benchmark procedure
+
+To compare old and fast path fairly, keep all of the following fixed:
+
+- same machine
+- same GPU count
+- same config
+- same batch size
+- same `val_interval`
+- same dataset root
+
+Recommended order:
+
+1. run `train.py` for a short baseline window and record first-batch latency and `s/it`
+2. run `train_fast.py` with the same setup
+3. compare:
+   - first-batch latency
+   - steady-state `s/it`
+   - GPU utilization stability
+   - process thread count
+
+### 8. Fast-path fallback rule
+
+If anything looks wrong in the fast path:
+
+- stop the fast run
+- keep the generated logs for comparison
+- switch back to `scripts/train.py` immediately
+
+Because the old path is untouched, fallback is trivial:
+
+```bash
+bash scripts/train.sh \
+  acot_challenge_generalist_lora_generalist \
+  generalist_v1_bs96 \
+  --val-interval=1000 \
+  --val-num-batches=8
+```
+
 
 ## 2. Compute norm stats for the clean-desktop config
 
@@ -91,7 +305,14 @@ Check:
 When the debug run is clean:
 
 ```bash
-bash scripts/train.sh acot_challenge_generalist_lora_generalist generalist_v1_bs96 --resume=true
+bash scripts/train.sh \
+  acot_challenge_generalist_lora_generalist \
+  generalist_v1_bs96 \
+  --val-interval=1000 \
+  --val-num-batches=8 \
+#   --resume=true Choose between two
+#   --overwrite
+
 ```
 
 Or directly:

@@ -24,6 +24,36 @@ Author: Codex
 
 What changed:
 
+- Fixed the local serve launch scripts to match the current `tyro` subcommand syntax:
+  - `scripts/server_checkpoint.sh` now uses `policy:checkpoint`
+  - `scripts/server_routed.sh` now uses `policy:adapter-routed`
+- Recorded the fix in `AGENTS/status.md`.
+
+What was verified:
+
+- `uv run python scripts/serve_policy.py --help` now clearly shows the expected subcommands:
+  - `policy:checkpoint`
+  - `policy:default`
+  - `policy:adapter-routed`
+- The old `--policy checkpoint` / `--policy adapter-routed` format is confirmed incompatible with the current CLI.
+
+What is still broken or unknown:
+
+- Full runtime serving with the real generalist checkpoint still needs a real launch test after this script fix.
+
+Immediate next step:
+
+- Re-run `bash scripts/server_checkpoint.sh 0 8999` with:
+  - `ACOT_SERVE_CONFIG=acot_challenge_generalist_lora_generalist`
+  - `ACOT_SERVE_CHECKPOINT=<...>/generalist_v1_bs96/5000`
+  and verify `/healthz` plus one real inference smoke test.
+
+Date: 2026-03-11
+
+Author: Codex
+
+What changed:
+
 - Added an additive fast-training path intended for `acot_challenge_generalist_lora_generalist` without modifying the legacy training path:
   - `scripts/train_fast.py`
   - `scripts/train_fast.sh`

@@ -11,7 +11,7 @@ export XLA_FLAGS="--xla_gpu_autotune_level=0"
 export PYTHONPATH=/root/openpi/src:${PYTHONPATH:-/app:/app/src}
 GIT_LFS_SKIP_SMUDGE=1 uv run python scripts/serve_policy.py \
     --port ${port} \
-    --policy adapter-routed \
+    policy:adapter-routed \
     --policy.config "${ACOT_ROUTED_CONFIG:-acot_challenge_generalist_lora_all}" \
     --policy.base-checkpoint "${ACOT_ROUTED_BASE_CHECKPOINT:-./checkpoints/acot_challenge_generalist_lora_all/generalist_v1/50000}" \
     --policy.adapter-dir "${ACOT_ROUTED_ADAPTER_DIR:-./adapters}"

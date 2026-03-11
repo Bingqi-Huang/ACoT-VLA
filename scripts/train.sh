@@ -10,24 +10,31 @@ EXP_NAME=${2}
 shift 2
 
 
-# Parse arguments for --resume and --overwrite
+# Parse training arguments and forward boolean flags in the form expected by train.py.
 TRAIN_ARGS=()
 RESUME=false
+OVERWRITE=false
 for arg in "$@"; do
-    if [[ "${arg}" == "--resume=true" ]]; then
-        RESUME=true
-    elif [[ "${arg}" == "--overwrite" ]]; then
-        # Ignore --overwrite if --resume=true is present
-        continue
-    else
-        TRAIN_ARGS+=("${arg}")
-    fi
+    case "${arg}" in
+        --resume|--resume=true)
+            RESUME=true
+            ;;
+        --overwrite|--overwrite=true)
+            OVERWRITE=true
+            ;;
+        *)
+            TRAIN_ARGS+=("${arg}")
+            ;;
+    esac
 done
 
-# Only add --overwrite if --resume=true is not present
-if [[ "$RESUME" != "true" ]]; then
-    TRAIN_ARGS+=("--overwrite")
+if [[ "${RESUME}" == "true" && "${OVERWRITE}" == "true" ]]; then
+    echo "Error: --resume and --overwrite cannot be used together." >&2
+    exit 1
 fi
+
+[[ "${RESUME}" == "true" ]] && TRAIN_ARGS+=("--resume")
+[[ "${OVERWRITE}" == "true" ]] && TRAIN_ARGS+=("--overwrite")
 
 LOG_DIR=./logs
 LOG_FILE="${LOG_DIR}/${CONFIG_NAME}_${EXP_NAME}_$(date +%Y%m%d_%H%M%S).log"

@@ -36,6 +36,10 @@ Last updated: 2026-03-11
 - Added a plain checkpoint-serving launch path for single-model test submissions:
   - `scripts/server_checkpoint.sh`
   - intended for configs like `acot_challenge_generalist_lora_clean_desktop`
+- Updated the serve launch scripts for the current `tyro` CLI subcommand format:
+  - `scripts/server_checkpoint.sh` now invokes `serve_policy.py policy:checkpoint`
+  - `scripts/server_routed.sh` now invokes `serve_policy.py policy:adapter-routed`
+  - this fixes the previous `Unrecognized options: --policy` startup failure
 - Adjusted Python packaging for the current Ubuntu 22.04 / Python 3.11 environment:
   - pinned transitive `av` resolution to `14.0.1` via `tool.uv.override-dependencies`
   - replaced deprecated `tool.uv.dev-dependencies` in `packages/openpi-client/pyproject.toml`

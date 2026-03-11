@@ -57,46 +57,37 @@ mkdir -p "${UV_CACHE_DIR}"
 
 ## Fast path for `acot_challenge_generalist_lora_generalist`
 
-The repo now has an **additive fast training path** for the full generalist run.
+The current recommended fast route for this config is:
 
-It does **not** replace the old path:
+1. build the generic `Reasoning2Action-Sim` frame cache
+2. verify the cache against raw data
+3. compute norm stats from the cache
+4. train with `scripts/train_fast.py --r2a-cache-root ...`
+
+This path is additive:
 
 - old path: `scripts/train.py` and `scripts/train.sh`
-- new fast path: `scripts/train_fast.py` and `scripts/train_fast.sh`
+- fast path: `scripts/train_fast.py` and `scripts/train_fast.sh`
+- cache path: generic frame cache plus `train_fast.py --r2a-cache-root ...`
 
-This means:
+It does **not** change checkpoint format, offline eval compatibility, or final inference / Docker serving.
 
-- old checkpoints stay valid
-- old eval / serve code stays valid
-- if the fast path fails, you can immediately fall back to the old path
+### Scope and caveat
 
-The fast path currently improves the training path in three places:
-
-1. it can reuse a precomputed `subtask` sampler index cache instead of rebuilding the full frame index list every launch
-2. it avoids the old multi-worker data-loader path and runs a single-process prefetch path instead
-3. it uses a fused training-step path when `grad_accum_steps=1`
-
-### Fast path scope and current caveat
-
-This fast path is currently intended for:
+This section is specifically for:
 
 ```text
 acot_challenge_generalist_lora_generalist
 ```
 
-Important caveat for this config:
+Important caveat:
 
-- the model uses `discrete_state_input=True`
-- prompt tokenization therefore depends on both `prompt` and `state`
-- because of that, the prompt-only cache script is **not valid** for this config
-- `scripts/precompute_prompt_cache.py` will intentionally refuse to run for this config
+- this config uses `discrete_state_input=True`
+- prompt tokenization depends on both `prompt` and `state`
+- so prompt-only token cache is not the right optimization here
+- the main optimization is the generic frame cache
 
-So for the current full generalist run, the relevant optimization is:
-
-- precompute `subtask` indices
-- then train through `train_fast.py`
-
-### 1. Prepare the same environment as the normal path
+### 1. Prepare the environment
 
 ```bash
 export ACOT_CHALLENGE_DATA_ROOT=/ssd_workspace/huggingface/lerobot/Reasoning2Action-Sim
@@ -117,147 +108,120 @@ If metadata cleanup has not been done yet:
 uv run ./scripts/cleanup_depth_metadata.py "$ACOT_CHALLENGE_DATA_ROOT"
 ```
 
-### 2. Compute norm stats first
-
-The fast path still uses the same data config and the same norm stats as the old path.
+### 2. Build the generic frame cache
 
 ```bash
-uv run python scripts/compute_norm_stats.py \
-    --config-name acot_challenge_generalist_lora_generalist \
-    --split train
+UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/build_reasoning2action_frame_cache.py \
+  --cache-root /path/to/r2a-frame-cache \
+  --data-root "${ACOT_CHALLENGE_DATA_ROOT}" \
+  --shard-size 2048 \
+  --num-workers 16
 ```
 
-### 3. Precompute the `subtask` index cache
+This builds one reusable cache for the whole `Reasoning2Action-Sim` family, not only this config.
 
-This is the main startup optimization for the current generalist config.
+### 3. Verify the cache
 
-Train split:
+Before training, verify raw-vs-cache equivalence for this config:
 
 ```bash
-uv run python scripts/precompute_subtask_index_cache.py \
-    --config-name acot_challenge_generalist_lora_generalist \
-    --split train
+UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/verify_reasoning2action_frame_cache.py \
+  --cache-root /path/to/r2a-frame-cache \
+  --config-name acot_challenge_generalist_lora_generalist \
+  --split train
 ```
 
-Validation split:
+### 4. Compute norm stats from the cache
 
 ```bash
-uv run python scripts/precompute_subtask_index_cache.py \
-    --config-name acot_challenge_generalist_lora_generalist \
-    --split val
+UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/compute_norm_stats_fast.py \
+  --config-name acot_challenge_generalist_lora_generalist \
+  --r2a-cache-root /path/to/r2a-frame-cache \
+  --split train
 ```
 
-Expected output location:
+This writes norm stats to the usual assets location, so downstream training and checkpoint loading still use the normal asset layout.
+
+### 5. Run a short fast debug job
 
 ```bash
-assets/acot_challenge_generalist_lora_generalist/fast_cache/
+DEBUG_MODE=true UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/train_fast.py \
+  acot_challenge_generalist_lora_generalist \
+  --r2a-cache-root /path/to/r2a-frame-cache \
+  --exp_name generalist_v1_bs96_fast_cache_debug \
+  --overwrite
 ```
 
-Expected files:
+Check:
 
-- `acot_challenge_generalist_lora_generalist_train_subtask_indices.npy`
-- `acot_challenge_generalist_lora_generalist_train_subtask_indices.meta.json`
-- `acot_challenge_generalist_lora_generalist_val_subtask_indices.npy`
-- `acot_challenge_generalist_lora_generalist_val_subtask_indices.meta.json`
-
-### 4. Do a short fast-path debug run
-
-Run a short debug job before the real training:
-
-```bash
-DEBUG_MODE=true uv run python scripts/train_fast.py \
-    acot_challenge_generalist_lora_generalist \
-    --exp_name generalist_v1_bs96_fast_debug \
-    --overwrite
-```
-
-What to check:
-
-- training starts normally
-- first batch is built successfully
+- first batch initializes correctly
 - loss logs appear
-- checkpoint writing still works
-- `train_metrics.jsonl` is written under the checkpoint dir
+- `train_metrics.jsonl` is written
+- checkpoint writing works
 
-### 5. Run the real fast-path training job
+### 6. Run the real fast training job
+
+Direct Python entry:
+
+```bash
+UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/train_fast.py \
+  acot_challenge_generalist_lora_generalist \
+  --r2a-cache-root /path/to/r2a-frame-cache \
+  --exp_name generalist_v1_bs96_fast_cache \
+  --val-interval=1000 \
+  --val-num-batches=8
+```
 
 Shell wrapper:
 
 ```bash
 bash scripts/train_fast.sh \
   acot_challenge_generalist_lora_generalist \
-  generalist_v1_bs96_fast \
+  generalist_v1_bs96_fast_cache \
+  --r2a-cache-root=/path/to/r2a-frame-cache \
   --val-interval=1000 \
   --val-num-batches=8
 ```
 
-Direct Python entry:
+Resume:
 
 ```bash
-uv run python scripts/train_fast.py \
-    acot_challenge_generalist_lora_generalist \
-    --exp_name generalist_v1_bs96_fast \
-    --val-interval=1000 \
-    --val-num-batches=8
+UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/train_fast.py \
+  acot_challenge_generalist_lora_generalist \
+  --r2a-cache-root /path/to/r2a-frame-cache \
+  --exp_name generalist_v1_bs96_fast_cache \
+  --resume=true
 ```
 
-If resuming an interrupted fast-path run:
+Restart from scratch:
 
 ```bash
-uv run python scripts/train_fast.py \
-    acot_challenge_generalist_lora_generalist \
-    --exp_name generalist_v1_bs96_fast \
-    --resume=true
+UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/train_fast.py \
+  acot_challenge_generalist_lora_generalist \
+  --r2a-cache-root /path/to/r2a-frame-cache \
+  --exp_name generalist_v1_bs96_fast_cache \
+  --overwrite
 ```
 
-If you want to discard an old fast-path run and restart from scratch:
+### 7. Compatibility target
 
-```bash
-uv run python scripts/train_fast.py \
-    acot_challenge_generalist_lora_generalist \
-    --exp_name generalist_v1_bs96_fast \
-    --overwrite
-```
+This route should preserve:
 
-### 6. What remains compatible with the old path
+- checkpoint layout under `./checkpoints/<config>/<exp_name>/`
+- `train_metrics.jsonl`
+- existing offline eval entrypoints
+- final checkpoint-based inference
+- final Docker / websocket serving
 
-The fast path is intentionally additive, so the outputs are meant to stay usable by the existing tooling:
+The cache is training-only infrastructure and should not enter the final runtime package.
 
-- checkpoint layout stays under `./checkpoints/<config>/<exp_name>/`
-- `train_metrics.jsonl` is still written in the checkpoint root
-- old offline eval scripts can still read the produced checkpoint
-- old checkpoint serving path can still load the produced checkpoint
+### 8. Fallback rule
 
-So if a fast-path training run produces the best checkpoint, you can keep using the usual downstream flow.
+If anything looks wrong:
 
-### 7. Recommended benchmark procedure
-
-To compare old and fast path fairly, keep all of the following fixed:
-
-- same machine
-- same GPU count
-- same config
-- same batch size
-- same `val_interval`
-- same dataset root
-
-Recommended order:
-
-1. run `train.py` for a short baseline window and record first-batch latency and `s/it`
-2. run `train_fast.py` with the same setup
-3. compare:
-   - first-batch latency
-   - steady-state `s/it`
-   - GPU utilization stability
-   - process thread count
-
-### 8. Fast-path fallback rule
-
-If anything looks wrong in the fast path:
-
-- stop the fast run
-- keep the generated logs for comparison
-- switch back to `scripts/train.py` immediately
+- stop the cache-backed fast run
+- keep the logs
+- fall back to `scripts/train.py` or raw `scripts/train_fast.py` without `--r2a-cache-root`
 
 Because the old path is untouched, fallback is trivial:
 

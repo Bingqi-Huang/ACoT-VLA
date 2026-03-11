@@ -1,6 +1,8 @@
 import functools
 import os
+import pathlib
 import platform
+import sys
 import time
 
 import etils.epath as epath
@@ -18,6 +20,11 @@ import openpi.training.config as _config
 import openpi.training.data_loader_fast as _data_loader_fast
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
+
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 import scripts.train as legacy_train
 
 

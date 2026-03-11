@@ -28,6 +28,23 @@ if str(_REPO_ROOT) not in sys.path:
 import scripts.train as legacy_train
 
 
+def _host_preview_images(data_loader, batch) -> list[wandb.Image]:
+    host_batch = getattr(getattr(data_loader, "_data_loader", None), "last_host_batch", None)
+    if isinstance(host_batch, dict) and "image" in host_batch:
+        image_tree = host_batch["image"]
+        first_camera = next(iter(image_tree.values()))
+        limit = min(5, len(first_camera))
+        return [
+            wandb.Image(np.concatenate([np.asarray(img[i]) for img in image_tree.values()], axis=1))
+            for i in range(limit)
+        ]
+
+    return [
+        wandb.Image(np.concatenate([np.asarray(img[i]) for img in batch[0].images.values()], axis=1))
+        for i in range(min(5, len(next(iter(batch[0].images.values())))))
+    ]
+
+
 def main(config: _config.TrainConfig):
     legacy_train.init_logging()
     legacy_train.logging.info(f"Running on: {platform.node()}")
@@ -88,10 +105,7 @@ def main(config: _config.TrainConfig):
             )
             legacy_train.logging.info("Initialized fast validation loader with %d batches per evaluation.", config.val_num_batches)
 
-    images_to_log = [
-        wandb.Image(np.concatenate([np.array(img[i]) for img in preview_batch[0].images.values()], axis=1))
-        for i in range(min(5, len(next(iter(preview_batch[0].images.values())))))
-    ]
+    images_to_log = _host_preview_images(preview_loader, preview_batch)
     wandb.log({"camera_views": images_to_log}, step=0)
 
     train_state, train_state_sharding = legacy_train.init_train_state(config, init_rng, mesh, resume=resuming)

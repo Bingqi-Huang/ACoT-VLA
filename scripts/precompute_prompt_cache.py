@@ -27,6 +27,10 @@ def main(
             break
     if tokenize_transform is None:
         raise ValueError(f"Config `{config_name}` does not use TokenizePrompt.")
+    if tokenize_transform.discrete_state_input:
+        raise ValueError(
+            f"Config `{config_name}` tokenizes prompts with state-dependent inputs; prompt-only cache is not valid."
+        )
 
     prompt_strings = sorted(_collect_prompt_strings(config, data_config, split=split))
     tokens = []

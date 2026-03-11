@@ -1,5 +1,8 @@
 import json
+import os
 import pathlib
+
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import openpi.training.config as _config
 import openpi.training.data_loader_fast as _data_loader_fast

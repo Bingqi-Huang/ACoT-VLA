@@ -86,6 +86,7 @@ class FastBatchProcessor:
         skip_norm_stats: bool = False,
     ):
         self._data_config = data_config
+        self._sample_repack_transforms = list(data_config.repack_transforms.inputs)
         self._sample_input_transforms = list(data_config.data_transforms.inputs)
         self._normalize = _transforms.Normalize(
             None if skip_norm_stats else data_config.norm_stats,
@@ -94,6 +95,7 @@ class FastBatchProcessor:
         self._resize = None
         self._inject_default_prompt = None
         self._tokenizer = None
+        self._tokenizer_uses_state = False
         self._pad = None
         for transform in data_config.model_transforms.inputs:
             if isinstance(transform, _transforms.InjectDefaultPrompt):
@@ -102,12 +104,15 @@ class FastBatchProcessor:
                 self._resize = transform
             elif isinstance(transform, _transforms.TokenizePrompt):
                 self._tokenizer = transform.tokenizer
+                self._tokenizer_uses_state = transform.discrete_state_input
             elif isinstance(transform, (_transforms.ACOTPadStatesAndActions, _transforms.PadStatesAndActions)):
                 self._pad = transform
             else:
                 raise ValueError(f"Unsupported fast-path model transform: {type(transform).__name__}")
 
-        self._prompt_cache = PromptTokenCache.from_path(prompt_cache_path_value)
+        self._prompt_cache = PromptTokenCache.from_path(
+            None if self._tokenizer_uses_state else prompt_cache_path_value
+        )
 
     def process(self, items: list[dict[str, Any] | None], expected_batch_size: int) -> dict[str, Any] | None:
         filtered_items = [item for item in items if item is not None]
@@ -122,6 +127,8 @@ class FastBatchProcessor:
                 if key in item
             }
             data = item
+            for transform in self._sample_repack_transforms:
+                data = transform(data)
             for transform in self._sample_input_transforms:
                 data = transform(data)
             if self._inject_default_prompt is not None:
@@ -149,7 +156,17 @@ class FastBatchProcessor:
             return batch
 
         prompts = [self._normalize_prompt_value(value) for value in prompt_values]
-        tokens, masks = zip(*(self._prompt_cache.get(prompt, self._tokenizer) for prompt in prompts), strict=True)
+        if self._tokenizer_uses_state:
+            if "state" not in batch:
+                raise ValueError("State is required for prompt tokenization in fast loader.")
+            states = [np.asarray(state) for state in batch["state"]]
+            token_pairs = [
+                self._tokenizer.tokenize(prompt, state)
+                for prompt, state in zip(prompts, states, strict=True)
+            ]
+        else:
+            token_pairs = [self._prompt_cache.get(prompt, self._tokenizer) for prompt in prompts]
+        tokens, masks = zip(*token_pairs, strict=True)
         batch["tokenized_prompt"] = np.stack(tokens, axis=0)
         batch["tokenized_prompt_mask"] = np.stack(masks, axis=0)
         return batch

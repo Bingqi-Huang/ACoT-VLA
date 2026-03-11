@@ -173,3 +173,32 @@ Consequence:
 
 - `scripts/precompute_prompt_cache.py` should refuse this config unless a state-aware cache design is added later.
 - The immediately useful fast-path cache for this config is the subtask-index cache, not prompt-token cache.
+
+Date: 2026-03-11
+
+Decision:
+
+- Do not revive the abandoned per-config final-sample offline cache path; use a generic `Reasoning2Action-Sim` frame-shard cache instead.
+
+Why:
+
+- A per-config cache has poor amortization when a single cache build can take on the order of the same wall-clock time as a full training run.
+- The competition roadmap needs reuse across:
+  - full generalist
+  - 5-task
+  - clean-desktop
+  - future specialist / adapter training
+- The common expensive work is at the raw data boundary:
+  - random mp4 access
+  - HEVC decode
+  - image resize
+  not at the later config-specific transform boundary.
+
+Consequence:
+
+- Cache only the shared intermediate data boundary:
+  - decoded+resized camera frames
+  - raw state/action windows
+  - prompt/task/frame metadata
+- Keep normalization, tokenization, padding, and config-specific action slicing in the fast loader at runtime.
+- The cache remains training-only infrastructure and must not affect checkpoint layout, offline eval inputs, or final Docker/websocket serving.

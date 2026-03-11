@@ -145,6 +145,20 @@ Last updated: 2026-03-11
   - single-GPU runs on newer hardware appear healthy and can drive GPU power much higher
   - dual-GPU startup / first-step latency is still unresolved
   - because both legacy `scripts/train.py` and additive `scripts/train_fast.py` show similar behavior, the main issue is currently believed to be shared JAX/XLA multi-GPU initialization / compilation rather than a fast-loader-only defect
+- Implemented an additive `Reasoning2Action-Sim` generic frame-cache path:
+  - `scripts/build_reasoning2action_frame_cache.py`
+  - `scripts/verify_reasoning2action_frame_cache.py`
+  - `scripts/compute_norm_stats_fast.py`
+  - `src/openpi/training/r2a_frame_cache.py`
+  - `src/openpi/training/data_loader_fast_r2a.py`
+- `scripts/train_fast.py` now accepts optional `--r2a-cache-root`:
+  - default behavior remains raw-data fast path
+  - when provided, train/val loaders switch to the cache-backed dataset
+- The generic frame cache stores an intermediate boundary only:
+  - decoded/resized `224x224` images
+  - raw state and raw action windows
+  - prompt/task/frame metadata
+  - it does not store normalized/tokenized/padded model-ready samples
 
 ## Known Open Work
 
@@ -169,11 +183,16 @@ Last updated: 2026-03-11
   - startup time improvement from subtask-index caching
   - compatibility with validation loader and `scripts/eval_offline.py`
   - any mismatch between legacy and fast checkpoint loading paths
+- Build one real generic Reasoning2Action frame cache and measure:
+  - wall-clock build time
+  - resulting disk footprint
+  - raw-vs-cache sample parity on actual data
+  - cache-backed `train_fast.py` throughput on the A100 machine
 - Determine whether the dual-GPU first-step stall is a JAX/XLA startup issue that also affects legacy `train.py`, or whether there is still a remaining fast-path-specific factor.
 - Decide whether the next throughput push should target:
   - a better online dataloader with episode locality / decoder reuse
-  - an offline training cache / resized sidecar asset path
-- If offline training caches are added, keep them additive and preserve legacy checkpoint / inference compatibility.
+  - or continued optimization of the new generic frame-cache path
+- Keep all frame-cache work additive and preserve legacy checkpoint / inference compatibility.
 
 ## Verification Notes
 
@@ -183,6 +202,8 @@ Last updated: 2026-03-11
 - `python3 -m py_compile` passes for the new offline evaluation files and the added model hooks.
 - `python3 -m py_compile` passes for the new training logging changes in `scripts/train.py` and `src/openpi/training/data_loader.py`.
 - `python3 -m py_compile` passes for the additive fast-training files after the latest host-preview / train-init isolation changes.
+- `python -m py_compile` passes for the new generic frame-cache files and `train_fast.py` cache flag wiring.
+- `UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -q src/openpi/training/r2a_frame_cache_test.py` passes.
 - `git diff --check` passes.
 - `uv run pytest ...` could not be completed in this environment because dependency resolution attempted network access and failed on DNS/package download.
 - Direct Python smoke execution of the new split helpers is currently blocked in this environment because the installed `ml_dtypes` version is too old for JAX import (`0.4.1`, JAX requires `>=0.5`).

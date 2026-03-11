@@ -62,6 +62,43 @@ Immediate next step:
   - or an offline resized-video / training-cache path
   because the inspected dataset format strongly suggests that training throughput is bottlenecked by random video access and decode.
 
+Date: 2026-03-11
+
+Author: Codex
+
+What changed:
+
+- Reverted the abandoned per-config final-sample cache direction.
+- Added a new additive generic `Reasoning2Action-Sim` frame-cache path:
+  - `scripts/build_reasoning2action_frame_cache.py`
+  - `scripts/verify_reasoning2action_frame_cache.py`
+  - `scripts/compute_norm_stats_fast.py`
+  - `src/openpi/training/r2a_frame_cache.py`
+  - `src/openpi/training/data_loader_fast_r2a.py`
+- Wired `scripts/train_fast.py` and `src/openpi/training/data_loader_fast.py` to accept an optional `--r2a-cache-root` flag.
+  - without the flag, behavior stays on the existing raw-data fast path
+  - with the flag, train/val loaders switch to the cache-backed dataset
+- Updated `Training_Notes.md`, `AGENTS/status.md`, `AGENTS/decisions.md`, and `AGENTS/runbook_training.md` with the generic frame-cache workflow.
+
+What was verified:
+
+- `python -m py_compile` passes for the new generic frame-cache modules and the `train_fast.py` flag wiring.
+- `UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -q src/openpi/training/r2a_frame_cache_test.py` passes.
+- `uv run python scripts/train_fast.py --help` still works with the new optional cache flag parsing.
+
+What is still broken or unknown:
+
+- No real `Reasoning2Action-Sim` cache has been built yet on actual data.
+- Raw-vs-cache parity has only synthetic/unit coverage so far, not a full real-data verification run.
+- Cache-backed training throughput on the A100 machine is still unmeasured.
+- The underlying dual-GPU JAX/XLA first-step issue remains separate and unresolved.
+
+Immediate next step:
+
+- Build one real frame cache on the preprocessing machine.
+- Run `scripts/verify_reasoning2action_frame_cache.py` on `acot_challenge_generalist_lora_generalist`.
+- Then benchmark `scripts/train_fast.py --r2a-cache-root ...` on the A100 machine against the raw fast path.
+
 Date: 2026-03-10
 
 Author: Codex

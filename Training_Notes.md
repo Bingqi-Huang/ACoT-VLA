@@ -726,3 +726,120 @@ export ACOT_CHALLENGE_DATA_ROOT=~/Datasets/lerobot/Reasoning2Action-Sim
 UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/compute_norm_stats.py --config-name acot_challenge_generalist_lora_all
 DEBUG_MODE=true UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/train.py --config-name acot_challenge_generalist_lora_all --exp_name generalist_debug --overwrite
 ```
+
+## 15. Reasoning2Action generic frame-cache fast path
+
+This is the current additive cache direction for the competition training line.
+
+It does **not** replace:
+
+- `scripts/train.py`
+- `scripts/train_fast.py`
+- raw LeRobot / mp4 datasets
+
+It adds a reusable intermediate cache for the whole `Reasoning2Action-Sim` family.
+
+### What this cache contains
+
+The cache is built once for the dataset family and is intended to be reused by:
+
+- `acot_challenge_generalist_lora_generalist`
+- `acot_challenge_generalist_lora_clean_desktop`
+- `acot_challenge_generalist_lora_5_tasks`
+- future `acot_specialist_*` configs
+
+It precomputes only the expensive shared part:
+
+- decode video frames from the original mp4 files
+- resize the 3 training cameras to `224x224`
+- store raw-ish frame/state/action/prompt/task metadata in shard files
+
+It deliberately does **not** precompute:
+
+- normalization
+- prompt tokenization
+- config-specific action slicing
+- final pad / final model batch layout
+
+That work is still done at training time through the existing fast transform path.
+
+### Files added for this workflow
+
+- `scripts/build_reasoning2action_frame_cache.py`
+- `scripts/verify_reasoning2action_frame_cache.py`
+- `scripts/compute_norm_stats_fast.py`
+- `src/openpi/training/r2a_frame_cache.py`
+- `src/openpi/training/data_loader_fast_r2a.py`
+
+### End-to-end workflow
+
+1. Build the cache once on the preprocessing machine.
+
+```bash
+export ACOT_CHALLENGE_DATA_ROOT=/path/to/Reasoning2Action-Sim
+export UV_CACHE_DIR=/tmp/uv-cache
+mkdir -p "${UV_CACHE_DIR}"
+
+UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/build_reasoning2action_frame_cache.py \
+  --cache-root /path/to/r2a-frame-cache \
+  --data-root "${ACOT_CHALLENGE_DATA_ROOT}" \
+  --shard-size 2048 \
+  --num-workers 16
+```
+
+2. Copy the built cache directory to the training machine.
+
+3. Verify raw-vs-cache equivalence for a target config before real training.
+
+```bash
+UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/verify_reasoning2action_frame_cache.py \
+  --cache-root /path/to/r2a-frame-cache \
+  --config-name acot_challenge_generalist_lora_generalist \
+  --split train
+```
+
+4. Compute norm stats from the cache if you want to avoid returning to raw video.
+
+```bash
+UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/compute_norm_stats_fast.py \
+  --config-name acot_challenge_generalist_lora_generalist \
+  --r2a-cache-root /path/to/r2a-frame-cache \
+  --split train
+```
+
+5. Run fast training against the cache by adding `--r2a-cache-root`.
+
+Debug run:
+
+```bash
+DEBUG_MODE=true UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/train_fast.py \
+  acot_challenge_generalist_lora_generalist \
+  --r2a-cache-root /path/to/r2a-frame-cache \
+  --exp_name generalist_fast_cache_debug \
+  --overwrite
+```
+
+Full run:
+
+```bash
+UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/train_fast.py \
+  acot_challenge_generalist_lora_generalist \
+  --r2a-cache-root /path/to/r2a-frame-cache \
+  --exp_name generalist_fast_cache_v1 \
+  --val-interval=1000 \
+  --val-num-batches=8
+```
+
+### Compatibility target
+
+The frame cache is training-only infrastructure.
+
+It should **not** change:
+
+- checkpoint directory layout
+- `train_metrics.jsonl`
+- existing offline eval entrypoints
+- final checkpoint-based inference
+- final Docker / websocket serving contract
+
+So the cache stays outside the final runtime package; only the produced checkpoint matters to serving.

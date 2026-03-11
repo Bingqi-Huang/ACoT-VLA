@@ -119,6 +119,70 @@ DEBUG_MODE=true uv run python scripts/train_fast.py \
   --overwrite
 ```
 
+### Generic Reasoning2Action frame-cache workflow
+
+This is the current additive offline-cache direction for the competition training path.
+
+Key property:
+
+- build once for the `Reasoning2Action-Sim` family
+- reuse across full generalist, 5-task, clean-desktop, and future specialists
+- keep the cache below the config-specific transform boundary
+
+Added entrypoints:
+
+- `scripts/build_reasoning2action_frame_cache.py`
+- `scripts/verify_reasoning2action_frame_cache.py`
+- `scripts/compute_norm_stats_fast.py`
+
+Build the cache on the preprocessing machine:
+
+```bash
+export ACOT_CHALLENGE_DATA_ROOT=/ssd_workspace/huggingface/lerobot/Reasoning2Action-Sim
+export UV_CACHE_DIR=/tmp/uv-cache
+mkdir -p "${UV_CACHE_DIR}"
+
+UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/build_reasoning2action_frame_cache.py \
+  --cache-root /path/to/r2a-frame-cache \
+  --data-root "${ACOT_CHALLENGE_DATA_ROOT}" \
+  --shard-size 2048 \
+  --num-workers 16
+```
+
+Verify a target config against the built cache:
+
+```bash
+UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/verify_reasoning2action_frame_cache.py \
+  --cache-root /path/to/r2a-frame-cache \
+  --config-name acot_challenge_generalist_lora_generalist \
+  --split train
+```
+
+Optional cached norm-stats path:
+
+```bash
+UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/compute_norm_stats_fast.py \
+  --config-name acot_challenge_generalist_lora_generalist \
+  --r2a-cache-root /path/to/r2a-frame-cache \
+  --split train
+```
+
+Run cache-backed fast training:
+
+```bash
+DEBUG_MODE=true UV_CACHE_DIR=${UV_CACHE_DIR} uv run python scripts/train_fast.py \
+  acot_challenge_generalist_lora_generalist \
+  --r2a-cache-root /path/to/r2a-frame-cache \
+  --exp_name generalist_fast_cache_debug \
+  --overwrite
+```
+
+Compatibility target:
+
+- cache is training-only
+- checkpoint layout must remain unchanged
+- existing offline eval and final Docker/websocket serving must continue to consume the produced checkpoints without adapters or cache-specific glue
+
 Full fast run:
 
 ```bash

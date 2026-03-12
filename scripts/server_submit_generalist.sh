@@ -11,11 +11,12 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=${XLA_PYTHON_CLIENT_PREALLOCATE:-false}
 export XLA_PYTHON_CLIENT_ALLOCATOR=${XLA_PYTHON_CLIENT_ALLOCATOR:-platform}
 export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_autotune_level=0}"
 
+export OPENPI_DATA_HOME=${OPENPI_DATA_HOME:-/root/.cache/openpi}
 export PYTHONPATH=/root/openpi/src:${PYTHONPATH:-/app:/app/src}
 export ACOT_SERVE_CONFIG=${ACOT_SERVE_CONFIG:-acot_challenge_generalist_lora_generalist}
 export ACOT_SERVE_CHECKPOINT=${ACOT_SERVE_CHECKPOINT:-/app/checkpoint/generalists-v1-10000}
 
-GIT_LFS_SKIP_SMUDGE=1 uv run python scripts/serve_policy.py \
+exec /.venv/bin/python3 scripts/serve_policy.py \
   --port "${port}" \
   policy:checkpoint \
   --policy.config "${ACOT_SERVE_CONFIG}" \

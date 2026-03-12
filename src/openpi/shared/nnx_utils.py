@@ -8,7 +8,6 @@ from typing import Any, ParamSpec, TypeVar, Optional
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import numpy as np
 import os
 

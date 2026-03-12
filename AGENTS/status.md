@@ -253,3 +253,42 @@ Last updated: 2026-03-12
 - `git diff --check` passes.
 - `uv run pytest ...` could not be completed in this environment because dependency resolution attempted network access and failed on DNS/package download.
 - Direct Python smoke execution of the new split helpers is currently blocked in this environment because the installed `ml_dtypes` version is too old for JAX import (`0.4.1`, JAX requires `>=0.5`).
+
+Date: 2026-03-12
+
+Author: Codex
+
+What changed:
+
+- Fixed a false-negative in `scripts/verify_reasoning2action_frame_cache.py`:
+  - `episode_index` and `frame_index` are now compared by value even when raw samples use `int64` and older cache files store `int32`.
+- Improved the failure message in `scripts/verify_reasoning2action_frame_cache.py` so small mismatches now print actual scalar values, not only shape/dtype.
+- `scripts/verify_reasoning2action_frame_cache.py` now compares nested batch structures recursively, so keys like `image` and `image_mask` no longer crash on dict-valued batches during parity checks.
+- `src/openpi/training/config.py` now auto-detects the common local `Reasoning2Action-Sim` roots:
+  - `~/Datasets/lerobot/Reasoning2Action-Sim`
+  - `~/Datasets/huggingface/lerobot/Reasoning2Action-Sim`
+- Hardened the cache build/read path in `src/openpi/training/r2a_frame_cache.py` so newly built caches preserve the original integer dtype for:
+  - `episode_index`
+  - `frame_index`
+- Added dtype regression coverage in `src/openpi/training/r2a_frame_cache_test.py` for:
+  - source-sample metadata conversion
+  - final cache assembly
+  - dataset reads from the assembled cache
+- Added direct verifier helper coverage in `scripts/verify_reasoning2action_frame_cache_test.py` for:
+  - nested dict batch comparison
+  - dtype-relaxed metadata comparison
+
+What was verified:
+
+- Direct local reproduction against the real cache shows the previously failing sample index `169803` now passes `episode_index` / `frame_index` verification when `check_dtype=False`.
+- Direct local reproduction against the real processed batch now passes for every key in:
+  - `image`
+  - `image_mask`
+  - `state`
+  - `coarse_actions`
+  - `actions`
+  - `task`
+  - `episode_index`
+  - `frame_index`
+  - `tokenized_prompt`
+  - `tokenized_prompt_mask`

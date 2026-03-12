@@ -13,13 +13,40 @@ import openpi.training.data_loader_fast_r2a as r2a_fast_loader
 import openpi.training.r2a_frame_cache as r2a_frame_cache
 
 
-def _assert_array_equal(name: str, left, right) -> None:
+def _assert_array_equal(name: str, left, right, *, check_dtype: bool = True) -> None:
+    if isinstance(left, dict) or isinstance(right, dict):
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            raise AssertionError(f"Mismatch for {name}: left type={type(left).__name__}, right type={type(right).__name__}")
+        left_keys = set(left)
+        right_keys = set(right)
+        if left_keys != right_keys:
+            raise AssertionError(f"Mismatch for {name}: left_keys={sorted(left_keys)}, right_keys={sorted(right_keys)}")
+        for key in sorted(left_keys):
+            _assert_array_equal(f"{name}.{key}", left[key], right[key], check_dtype=check_dtype)
+        return
+
+    if isinstance(left, (list, tuple)) or isinstance(right, (list, tuple)):
+        if not isinstance(left, (list, tuple)) or not isinstance(right, (list, tuple)):
+            raise AssertionError(f"Mismatch for {name}: left type={type(left).__name__}, right type={type(right).__name__}")
+        if len(left) != len(right):
+            raise AssertionError(f"Mismatch for {name}: left_len={len(left)}, right_len={len(right)}")
+        for idx, (left_item, right_item) in enumerate(zip(left, right, strict=True)):
+            _assert_array_equal(f"{name}[{idx}]", left_item, right_item, check_dtype=check_dtype)
+        return
+
     left_arr = np.asarray(left)
     right_arr = np.asarray(right)
-    if left_arr.shape != right_arr.shape or left_arr.dtype != right_arr.dtype or not np.array_equal(left_arr, right_arr):
-        raise AssertionError(
-            f"Mismatch for {name}: left={left_arr.shape}@{left_arr.dtype}, right={right_arr.shape}@{right_arr.dtype}"
-        )
+    same_shape = left_arr.shape == right_arr.shape
+    same_dtype = left_arr.dtype == right_arr.dtype
+    same_values = np.array_equal(left_arr, right_arr)
+    if same_shape and same_values and (same_dtype or not check_dtype):
+        return
+
+    details = [f"left={left_arr.shape}@{left_arr.dtype}", f"right={right_arr.shape}@{right_arr.dtype}"]
+    if left_arr.size <= 4 and right_arr.size <= 4:
+        details.append(f"left_value={left_arr.tolist()}")
+        details.append(f"right_value={right_arr.tolist()}")
+    raise AssertionError(f"Mismatch for {name}: {', '.join(details)}")
 
 
 def main(
@@ -66,8 +93,18 @@ def main(
             raise AssertionError(f"Prompt mismatch at index {index}")
         if str(raw_sample["task"]) != str(cache_sample["task"]):
             raise AssertionError(f"Task mismatch at index {index}")
-        _assert_array_equal(f"{index}:episode_index", raw_sample["episode_index"], cache_sample["episode_index"])
-        _assert_array_equal(f"{index}:frame_index", raw_sample["frame_index"], cache_sample["frame_index"])
+        _assert_array_equal(
+            f"{index}:episode_index",
+            raw_sample["episode_index"],
+            cache_sample["episode_index"],
+            check_dtype=False,
+        )
+        _assert_array_equal(
+            f"{index}:frame_index",
+            raw_sample["frame_index"],
+            cache_sample["frame_index"],
+            check_dtype=False,
+        )
 
     processor = fast_loader.FastBatchProcessor(
         data_config,
@@ -85,7 +122,12 @@ def main(
         raise AssertionError("Batch processor unexpectedly returned None during cache verification.")
 
     for key in raw_batch:
-        _assert_array_equal(f"batch:{key}", raw_batch[key], cache_batch[key])
+        _assert_array_equal(
+            f"batch:{key}",
+            raw_batch[key],
+            cache_batch[key],
+            check_dtype=key not in {"episode_index", "frame_index"},
+        )
 
     print(
         f"Verified Reasoning2Action frame cache for {config_name} split={split} "

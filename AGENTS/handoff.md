@@ -352,3 +352,32 @@ Immediate next step:
 Git note:
 
 - Commit substantial progress before handoff so the next agent can diff exact changes instead of reconstructing them from notes.
+
+Date: 2026-03-12
+
+Author: Codex
+
+What changed:
+
+- Fixed the current cache-verification blocker where `verify_reasoning2action_frame_cache.py` failed on `episode_index` / `frame_index` dtype-only differences (`int64` raw vs `int32` cache).
+- Improved `verify_reasoning2action_frame_cache.py` mismatch output so scalar mismatches now include actual values.
+- Updated `verify_reasoning2action_frame_cache.py` to compare nested batch outputs recursively, which fixes the current `np.array_equal` crash on dict-valued keys like `image` and `image_mask`.
+- Updated `src/openpi/training/config.py` to auto-detect the local `Reasoning2Action-Sim` root when the machine uses `~/Datasets/huggingface/lerobot/...` instead of `~/Datasets/lerobot/...`.
+- Updated `src/openpi/training/r2a_frame_cache.py` so future cache builds no longer downcast those metadata indices to `int32` during staging, assembly, or dataset reads.
+- Added regression tests in `src/openpi/training/r2a_frame_cache_test.py` covering both the source-to-cache path and the final assembled-cache path.
+- Added `scripts/verify_reasoning2action_frame_cache_test.py` for verifier helper coverage.
+
+What was verified:
+
+- `python -m py_compile` passes for:
+  - `src/openpi/training/r2a_frame_cache.py`
+  - `src/openpi/training/r2a_frame_cache_test.py`
+  - `scripts/verify_reasoning2action_frame_cache.py`
+- `python -m pytest -q src/openpi/training/r2a_frame_cache_test.py` passes with 3 tests.
+- Direct reproduction against the real cache shows the previously reported failing sample index `169803` now passes the relaxed metadata-value check.
+- `python -m pytest -q scripts/verify_reasoning2action_frame_cache_test.py src/openpi/training/r2a_frame_cache_test.py` passes with 5 tests.
+- Direct reproduction against the real processed batch now passes the verifier comparison for all current batch keys.
+
+Immediate next step:
+
+- Re-run `scripts/verify_reasoning2action_frame_cache.py` on the real cache and see whether any further parity mismatch remains after the dtype-only metadata check is removed.

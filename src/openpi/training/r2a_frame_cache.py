@@ -334,8 +334,8 @@ def source_sample_to_cache_sample(
 
     metadata = {
         "repo_name": np.asarray(repo_name),
-        "episode_index": np.int32(int(sample["episode_index"])),
-        "frame_index": np.int32(int(sample["frame_index"])),
+        "episode_index": np.asarray(sample["episode_index"]),
+        "frame_index": np.asarray(sample["frame_index"]),
         "task": np.asarray(task),
         "prompt": np.asarray(prompt),
         "timestamp": np.float32(sample["timestamp"]),
@@ -586,8 +586,8 @@ def _assemble_final_cache(
                 np.asarray([task_vocab.setdefault(v, len(task_vocab)) for v in task_strings], dtype=np.int32)
             )
             index_rows["repo_index"].append(np.full(repo_manifest.sample_count, repo_vocab[repo_name], dtype=np.int32))
-            index_rows["episode_index"].append(np.asarray(local_indices["episode_index"], dtype=np.int32))
-            index_rows["frame_index"].append(np.asarray(local_indices["frame_index"], dtype=np.int32))
+            index_rows["episode_index"].append(np.asarray(local_indices["episode_index"]))
+            index_rows["frame_index"].append(np.asarray(local_indices["frame_index"]))
             index_rows["timestamp"].append(np.asarray(local_indices["timestamp"], dtype=np.float32))
             index_rows["subtask_valid"].append(np.asarray(local_indices["subtask_valid"], dtype=np.bool_))
             index_rows["shard_index"].append(np.asarray(local_indices["shard_index"], dtype=np.int32) + global_shard_offset)
@@ -674,8 +674,8 @@ class R2AFrameCacheDataset:
             "observation.state": np.asarray(shard_arrays["observation.state"][shard_offset]),
             "action": np.asarray(shard_arrays["action"][shard_offset]),
             "timestamp": np.float32(self._index_arrays["timestamp"][sample_index]),
-            "episode_index": np.int32(self._index_arrays["episode_index"][sample_index]),
-            "frame_index": np.int32(self._index_arrays["frame_index"][sample_index]),
+            "episode_index": np.asarray(self._index_arrays["episode_index"][sample_index]),
+            "frame_index": np.asarray(self._index_arrays["frame_index"][sample_index]),
             "task_index": np.int32(task_index),
             "task": self._task_vocab[task_index],
             "prompt": self._prompt_vocab[prompt_index],

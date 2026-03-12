@@ -27,8 +27,8 @@ def _write_fake_cache(cache_root: pathlib.Path) -> None:
 
     index_arrays = {
         "repo_index": np.asarray([0, 0, 1], dtype=np.int32),
-        "episode_index": np.asarray([0, 1, 0], dtype=np.int32),
-        "frame_index": np.asarray([0, 1, 2], dtype=np.int32),
+        "episode_index": np.asarray([0, 1, 0], dtype=np.int64),
+        "frame_index": np.asarray([0, 1, 2], dtype=np.int64),
         "task_index": np.asarray([0, 1, 0], dtype=np.int32),
         "prompt_index": np.asarray([0, 1, 0], dtype=np.int32),
         "timestamp": np.asarray([0.1, 0.2, 0.3], dtype=np.float32),
@@ -64,6 +64,59 @@ def _write_fake_cache(cache_root: pathlib.Path) -> None:
     r2a_frame_cache.write_manifest(cache_root, manifest)
 
 
+def _write_fake_staged_repo_cache(cache_root: pathlib.Path) -> None:
+    repo_name = "task_a"
+    (r2a_frame_cache.staged_repo_dir(cache_root, repo_name) / "index").mkdir(parents=True, exist_ok=True)
+    (r2a_frame_cache.staged_repo_dir(cache_root, repo_name) / "shards").mkdir(parents=True, exist_ok=True)
+
+    top = np.zeros((2, 224, 224, 3), dtype=np.uint8)
+    left = np.ones((2, 224, 224, 3), dtype=np.uint8)
+    right = np.full((2, 224, 224, 3), 2, dtype=np.uint8)
+    state = np.arange(2 * 8, dtype=np.float32).reshape(2, 8)
+    action = np.arange(2 * 5 * 4, dtype=np.float32).reshape(2, 5, 4)
+
+    np.save(r2a_frame_cache.staged_repo_shard_path(cache_root, repo_name, 0, "observation.images.top_head"), top)
+    np.save(r2a_frame_cache.staged_repo_shard_path(cache_root, repo_name, 0, "observation.images.hand_left"), left)
+    np.save(r2a_frame_cache.staged_repo_shard_path(cache_root, repo_name, 0, "observation.images.hand_right"), right)
+    np.save(r2a_frame_cache.staged_repo_shard_path(cache_root, repo_name, 0, "observation.state"), state)
+    np.save(r2a_frame_cache.staged_repo_shard_path(cache_root, repo_name, 0, "action"), action)
+
+    index_arrays = {
+        "episode_index": np.asarray([3, 4], dtype=np.int64),
+        "frame_index": np.asarray([11, 12], dtype=np.int64),
+        "timestamp": np.asarray([0.1, 0.2], dtype=np.float32),
+        "subtask_valid": np.asarray([True, False], dtype=np.bool_),
+        "task": np.asarray(["Task A", "Task A"]),
+        "prompt": np.asarray(["Prompt A", "Prompt A"]),
+        "shard_index": np.asarray([0, 0], dtype=np.int32),
+        "shard_offset": np.asarray([0, 1], dtype=np.int32),
+    }
+    for name, array in index_arrays.items():
+        np.save(r2a_frame_cache.staged_repo_index_path(cache_root, repo_name, name), array)
+
+    manifest = r2a_frame_cache.RepoStageManifest(
+        repo_name=repo_name,
+        sample_count=2,
+        shard_sizes=(2,),
+        data_fields=(
+            r2a_frame_cache.FieldSpec("observation.images.top_head", "uint8", (224, 224, 3)),
+            r2a_frame_cache.FieldSpec("observation.images.hand_left", "uint8", (224, 224, 3)),
+            r2a_frame_cache.FieldSpec("observation.images.hand_right", "uint8", (224, 224, 3)),
+            r2a_frame_cache.FieldSpec("observation.state", "float32", (8,)),
+            r2a_frame_cache.FieldSpec("action", "float32", (5, 4)),
+        ),
+        index_fields=tuple(
+            r2a_frame_cache.FieldSpec(name, str(array.dtype), tuple(array.shape[1:]))
+            for name, array in index_arrays.items()
+        ),
+        action_chunk_size=5,
+        video_tolerance_s=0.15,
+        data_root_fingerprint="fake",
+        complete=True,
+    )
+    r2a_frame_cache.write_repo_stage_manifest(cache_root, repo_name, manifest)
+
+
 def test_r2a_frame_cache_dataset_filters_repo_and_metadata(tmp_path: pathlib.Path):
     cache_root = tmp_path / "cache"
     _write_fake_cache(cache_root)
@@ -81,5 +134,44 @@ def test_r2a_frame_cache_dataset_filters_repo_and_metadata(tmp_path: pathlib.Pat
     assert sample["task"] == "Task A"
     assert sample["prompt"] == "Prompt A"
     assert sample["frame_index"] == 2
+    assert np.asarray(sample["episode_index"]).dtype == np.int64
+    assert np.asarray(sample["frame_index"]).dtype == np.int64
     assert sample["observation.images.hand_right"].shape == (224, 224, 3)
     np.testing.assert_array_equal(dataset.selected_subtask_indices(), np.asarray([0], dtype=np.int64))
+
+
+def test_source_sample_to_cache_sample_preserves_index_dtype():
+    sample = {
+        "observation.images.top_head": np.zeros((224, 224, 3), dtype=np.uint8),
+        "observation.images.hand_left": np.zeros((224, 224, 3), dtype=np.uint8),
+        "observation.images.hand_right": np.zeros((224, 224, 3), dtype=np.uint8),
+        "observation.state": np.zeros((8,), dtype=np.float32),
+        "action": np.zeros((5, 4), dtype=np.float32),
+        "prompt": "Prompt A",
+        "task": "Task A",
+        "episode_index": np.int64(7),
+        "frame_index": np.int64(9),
+        "timestamp": np.float32(0.1),
+    }
+
+    _, metadata = r2a_frame_cache.source_sample_to_cache_sample(sample, repo_name="task_a")
+
+    assert np.asarray(metadata["episode_index"]).dtype == np.int64
+    assert np.asarray(metadata["frame_index"]).dtype == np.int64
+
+
+def test_assemble_final_cache_preserves_index_dtype(tmp_path: pathlib.Path):
+    cache_root = tmp_path / "cache"
+    _write_fake_staged_repo_cache(cache_root)
+
+    manifest = r2a_frame_cache._assemble_final_cache(
+        cache_root=cache_root,
+        repo_names=["task_a"],
+        repo_vocab={"task_a": 0},
+        data_root_fingerprint="fake",
+        action_chunk_size=5,
+    )
+
+    assert manifest.sample_count == 2
+    assert np.load(r2a_frame_cache.index_array_path(cache_root, "episode_index")).dtype == np.int64
+    assert np.load(r2a_frame_cache.index_array_path(cache_root, "frame_index")).dtype == np.int64

@@ -17,7 +17,7 @@ export ACOT_SERVE_CONFIG=${ACOT_SERVE_CONFIG:-acot_challenge_generalist_lora_gen
 export ACOT_SERVE_CHECKPOINT=${ACOT_SERVE_CHECKPOINT:-/submission/checkpoint/generalists-v1-10000}
 
 cd /submission
-exec python scripts/serve_policy.py \
+exec python3 scripts/serve_policy.py \
   --port "${port}" \
   policy:checkpoint \
   --policy.config "${ACOT_SERVE_CONFIG}" \

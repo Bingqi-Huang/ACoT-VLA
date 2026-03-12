@@ -2331,9 +2331,9 @@ _CONFIGS = [
         grad_accum_steps=1 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         freeze_filter=_reasoning2action_lora_freeze_filter(),
     ),
-    # Recommended next-step generalist run: keep the same task mix/model, but
-    # restore gripper state, shorten warmup, densify checkpointing, and make
-    # online validation more representative.
+    # Recommended next-step generalist run: keep the same task mix/model and
+    # current masking behavior, but shorten warmup, densify checkpointing, and
+    # make online validation more representative.
     TrainConfig(
         name="acot_challenge_generalist_lora_generalist_tuned",
         model=_reasoning2action_lora_model(),

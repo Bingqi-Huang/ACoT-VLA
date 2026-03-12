@@ -21,9 +21,19 @@ Last updated: 2026-03-12
   - `src/openpi/models/acot_vla_test.py`
 - Added challenge-specific LoRA training configs:
   - `acot_challenge_generalist_lora_generalist`
+  - `acot_challenge_generalist_lora_generalist_tuned`
   - `acot_challenge_generalist_lora_clean_desktop`
   - `acot_challenge_generalist_lora_5_tasks`
   - generated `acot_specialist_*` configs for the 9 challenge tasks
+- Added a recommended follow-up generalist config that keeps the current masks unchanged and only tunes training cadence:
+  - `acot_challenge_generalist_lora_generalist_tuned`
+  - `warmup_steps=2000`
+  - `decay_steps=24000`
+  - `num_train_steps=24000`
+  - `val_interval=1000`
+  - `val_num_batches=32`
+  - `save_interval=1000`
+  - `batch_size=120`
 - Added adapter-routing infrastructure for inference:
   - `scripts/extract_adapter.py`
   - `src/openpi/policies/adapter_routed_policy.py`
@@ -206,6 +216,7 @@ Last updated: 2026-03-12
 ## Known Open Work
 
 - Continue the retained `acot_challenge_generalist_lora_generalist` line to at least the next saved checkpoint boundary and keep the best-val step as a real checkpoint, not only in `train_metrics.jsonl`.
+- Decide whether the next mainline run should continue `generalist_v1_bs96` or switch to `acot_challenge_generalist_lora_generalist_tuned`, which keeps the original masks and only changes schedule / validation / checkpoint cadence.
 - Run `scripts/eval_offline.py` on the retained generalist checkpoint tree and use it for checkpoint selection on the current mainline.
 - Finish or verify full extraction of all dataset parts.
 - Validate a small debug training run on the actual target machine with `grad_accum_steps > 1`.

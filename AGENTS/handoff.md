@@ -31,20 +31,33 @@ What changed:
   - one retained saved checkpoint at step `5000`
   - metrics recorded through step `8500`
 - Documented that fast-path training is still additive and should not be treated as the default launcher yet.
+- Added `acot_challenge_generalist_lora_generalist_tuned` as the recommended next-step generalist config.
+- Recorded the accepted tuned-config changes:
+  - `warmup_steps=2000`
+  - `decay_steps=24000`
+  - `num_train_steps=24000`
+  - `val_interval=1000`
+  - `val_num_batches=32`
+  - `save_interval=1000`
+  - `batch_size=120`
+- Recorded the rejected ablation:
+  - do not change the current state/action masks in the tuned config
 
 What was verified:
 
 - The updated docs now match the current active config names in `src/openpi/training/config.py`.
 - The updated docs now match the retained experiment naming under `checkpoints/acot_challenge_generalist_lora_generalist/`.
+- `src/openpi/training/config.py` contains `acot_challenge_generalist_lora_generalist_tuned`, and it keeps the original masking behavior.
 
 What is still broken or unknown:
 
 - `scripts/server_routed.sh` still carries stale built-in defaults and must be overridden explicitly.
 - `scripts/train_fast.py` still needs a checkpoint-save fix before it can be promoted to the main training entrypoint.
+- The tuned generalist config has not been run yet, so its wall-clock throughput and val behavior are still unverified.
 
 Immediate next step:
 
-- Continue the retained generalist run to the next checkpoint boundary, then use offline eval plus checkpoint serving on that line before revisiting routed serving or fast-path promotion.
+- Choose between continuing `generalist_v1_bs96` to the next checkpoint boundary or launching `acot_challenge_generalist_lora_generalist_tuned` as the next mainline ablation, then use offline eval plus checkpoint serving before revisiting routed serving or fast-path promotion.
 
 Date: 2026-03-11
 

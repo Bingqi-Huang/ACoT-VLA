@@ -82,6 +82,32 @@ DEBUG_MODE=true uv run python scripts/train.py \
 
 8. Record outcomes in `AGENTS/experiments.md`.
 
+## Recommended Current Generalist Launch
+
+The repo now includes a follow-up config for the next mainline generalist run:
+
+- `acot_challenge_generalist_lora_generalist_tuned`
+
+This config intentionally keeps the current state/action masking unchanged and only adjusts:
+
+- `warmup_steps=2000`
+- `decay_steps=24000`
+- `num_train_steps=24000`
+- `val_interval=1000`
+- `val_num_batches=32`
+- `save_interval=1000`
+- `batch_size=120`
+
+Suggested launch:
+
+```bash
+bash scripts/train.sh \
+  acot_challenge_generalist_lora_generalist_tuned \
+  generalist_tuned_v1
+```
+
+Use this config when the goal is to improve learning-rate timing and checkpoint selection without introducing a new mask ablation into the current mainline.
+
 ## Fast Path Workflow
 
 The fast path is additive. It should not replace the legacy path until it is verified on the target hardware.

@@ -318,7 +318,7 @@ def main(config: _config.TrainConfig, *, r2a_cache_root: pathlib.Path | None = N
             metrics_logger.log({"event": "val", **reduced_val_info})
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
-            _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+            _checkpoints.save_state(checkpoint_manager, train_state, train_data_loader, step)
             checkpoint_payload = {
                 "checkpoint/step": step,
                 "checkpoint/train_state_step": int(jax.device_get(train_state.step)),

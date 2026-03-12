@@ -221,6 +221,7 @@ class FastTorchDataLoader:
         self._batch_processor = batch_processor
         self._prefetch_batches = max(prefetch_batches, 1)
         self._last_host_batch = None
+        self._partial_batch_warnings = 0
 
         generator = torch.Generator()
         generator.manual_seed(seed)
@@ -252,10 +253,14 @@ class FastTorchDataLoader:
                             break
                         batch = self._batch_processor.process(raw_items, self._local_batch_size)
                         if batch is None:
+                            if self._partial_batch_warnings < 5:
+                                print(
+                                    "[Fast Data Load Warning] Skipping incomplete batch after sample filtering; "
+                                    f"expected {self._local_batch_size} items."
+                                )
+                                self._partial_batch_warnings += 1
                             continue
                         result_queue.put(batch)
-                    if self._num_batches is not None:
-                        break
             except Exception as exc:  # pragma: no cover - surfaced in consumer
                 result_queue.put(exc)
             finally:
@@ -297,6 +302,7 @@ def load_cached_subtask_indices(
     split: str,
     *,
     source_tag: str = "raw",
+    expected_dataset_size: int | None = None,
 ) -> np.ndarray | None:
     cache_path = subtask_index_cache_path(train_config, split, source_tag=source_tag)
     metadata_path = subtask_index_metadata_path(train_config, split, source_tag=source_tag)
@@ -307,6 +313,8 @@ def load_cached_subtask_indices(
     if metadata.get("config_name") != train_config.name or metadata.get("split") != split:
         return None
     if metadata.get("source_tag") != source_tag:
+        return None
+    if expected_dataset_size is not None and metadata.get("dataset_size") != int(expected_dataset_size):
         return None
     return np.load(cache_path, mmap_mode="r")
 
@@ -392,7 +400,12 @@ def create_data_loader(
     if data_config.dataloader_sampler:
         indices = None
         if use_cached_subtask_indices:
-            indices = load_cached_subtask_indices(config, split, source_tag=subtask_source_tag)
+            indices = load_cached_subtask_indices(
+                config,
+                split,
+                source_tag=subtask_source_tag,
+                expected_dataset_size=len(raw_dataset),
+            )
         if indices is None:
             if r2a_cache_root is None:
                 indices = build_subtask_indices(

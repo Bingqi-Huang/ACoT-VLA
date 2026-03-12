@@ -211,7 +211,10 @@ Last updated: 2026-03-12
 - Fast path should still be treated as additive rather than primary:
   - there is no retained real cache-backed training run in the current workspace
   - no retained throughput benchmark shows a clear win on the target machine yet
-  - `scripts/train_fast.py` still needs a checkpoint-save fix before it can be promoted as the default launcher
+  - `scripts/train_fast.py` checkpoint saving has been fixed for the main training loader path
+  - fast loader `num_batches` iteration now mirrors the legacy loader across dataset exhaustion
+  - cached fast-path subtask indices now reject obvious stale-cache cases when the recorded dataset size no longer matches the active dataset
+  - targeted regression coverage now exists in `src/openpi/training/data_loader_fast_test.py`
 
 ## Known Open Work
 
@@ -235,7 +238,6 @@ Last updated: 2026-03-12
   - `acot_specialist_sorting` should include `sorting_packages_part_1`, `sorting_packages_part_2`, and `sorting_packages_part_3`
 - Audit other task families for future `_part_*` shards and fold them into the same-task configs rather than creating new route keys.
 - Record one real end-to-end routed-serving validation run with extracted adapters so the routing path is validated beyond static code inspection.
-- Fix the current `scripts/train_fast.py` checkpoint-save path before promoting fast training as a primary launcher.
 - Re-validate additive fast-path runtime behavior on the intended hardware, especially:
   - startup time improvement from subtask-index caching
   - compatibility with validation loader and `scripts/eval_offline.py`

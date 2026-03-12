@@ -24,6 +24,42 @@ Author: Codex
 
 What changed:
 
+- Fixed the blocking fast-path checkpoint save bug in `scripts/train_fast.py`.
+- Fixed a fast/legacy behavior drift in `src/openpi/training/data_loader_fast.py` so `num_batches` loaders now keep iterating across dataset exhaustion like the legacy loader.
+- Added basic stale-cache protection for cached subtask indices by rejecting cache metadata whose recorded dataset size no longer matches the active dataset.
+- Added targeted fast-path regression coverage in `src/openpi/training/data_loader_fast_test.py`.
+
+What was verified:
+
+- `python3 -m py_compile` passes for:
+  - `scripts/train_fast.py`
+  - `src/openpi/training/data_loader_fast.py`
+  - `src/openpi/training/data_loader_fast_test.py`
+- `UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -q` passes for:
+  - `src/openpi/training/data_loader_fast_test.py`
+  - `scripts/verify_reasoning2action_frame_cache_test.py`
+  - `src/openpi/training/r2a_frame_cache_test.py`
+
+What is still broken or unknown:
+
+- There is still no retained real cache-backed training run in the workspace, so fast-path wall-clock gain and long-run checkpoint compatibility remain unverified on target hardware.
+- Cached subtask-index validation now checks dataset size, but not a stronger split/cache fingerprint; stale-cache cases with unchanged dataset length could still slip through.
+- `scripts/server_routed.sh` still carries stale built-in defaults and must be overridden explicitly.
+
+Immediate next step:
+
+- Resume `acot_challenge_generalist_lora_generalist` from the retained `10000` checkpoint with `scripts/train_fast.py --r2a-cache-root ...` on the training machine and confirm:
+  - next checkpoint save succeeds
+  - validation still runs as expected
+  - the resulting checkpoint remains readable by offline eval
+  - measured startup/throughput is actually better than the legacy path
+
+Date: 2026-03-12
+
+Author: Codex
+
+What changed:
+
 - Pulled `AGENTS/status.md`, `AGENTS/PLAN.md`, `AGENTS/runbook_training.md`, and `Training_Notes.md` back toward the current codebase and retained artifacts.
 - Replaced the removed generalist config name `acot_challenge_generalist_lora_all` in active training guidance with `acot_challenge_generalist_lora_generalist`.
 - Updated docs to reflect the retained generalist artifact shape:
@@ -52,7 +88,6 @@ What was verified:
 What is still broken or unknown:
 
 - `scripts/server_routed.sh` still carries stale built-in defaults and must be overridden explicitly.
-- `scripts/train_fast.py` still needs a checkpoint-save fix before it can be promoted to the main training entrypoint.
 - The tuned generalist config has not been run yet, so its wall-clock throughput and val behavior are still unverified.
 
 Immediate next step:

@@ -116,7 +116,7 @@ Current practical status:
 
 - do not treat `scripts/train_fast.py` as the default launcher yet
 - there is still no retained real cache-backed training run in the workspace
-- `scripts/train_fast.py` still needs a checkpoint-save fix before it is safe to promote as the main entrypoint
+- the fast loader now has a fixed checkpoint-save path, but it still needs a real retained cache-backed run before promotion
 
 ### Intended Benefits
 
@@ -229,7 +229,7 @@ bash scripts/train_fast.sh \
 
 - For `acot_challenge_generalist_lora_generalist`, prompt-only token caching is not valid because tokenization depends on state (`discrete_state_input=True`).
 - The currently useful cache is the subtask-index cache, not the prompt-token cache.
-- The generic frame-cache direction is still the main optimization bet, but it remains a secondary path until a real cache-backed run and checkpoint-save path are validated end-to-end.
+- The generic frame-cache direction is still the main optimization bet, but it remains a secondary path until a real cache-backed run is validated end-to-end.
 
 ## Compatibility Notes
 

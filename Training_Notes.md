@@ -84,7 +84,7 @@ Current caveat:
 
 - do not make `scripts/train_fast.py` the default launcher yet
 - there is still no retained real cache-backed training run in this workspace
-- `scripts/train_fast.py` still needs a checkpoint-save fix before it is safe as the primary path
+- the fast path now has a fixed checkpoint-save path, but it still needs a real retained cache-backed training run before it should be treated as primary
 
 ### Scope and caveat
 

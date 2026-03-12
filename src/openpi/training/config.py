@@ -2331,6 +2331,58 @@ _CONFIGS = [
         grad_accum_steps=1 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         freeze_filter=_reasoning2action_lora_freeze_filter(),
     ),
+    # Recommended next-step generalist run: keep the same task mix/model, but
+    # restore gripper state, shorten warmup, densify checkpointing, and make
+    # online validation more representative.
+    TrainConfig(
+        name="acot_challenge_generalist_lora_generalist_tuned",
+        model=_reasoning2action_lora_model(),
+        data=dataclasses.replace(
+            _reasoning2action_data_config(
+                _reasoning2action_repo_ids(
+                    "pour_workpiece",
+                    "open_door",
+                    "scoop_popcorn",
+                    "scoop_popcorn_part_2",
+                    "hold_pot",
+                    "place_block_into_box",
+                    "take_wrong_item_shelf",
+                    "stock_and_straighten_shelf",
+                    "stock_and_straighten_shelf_part_2",
+                    "sorting_packages_part_1",
+                    "sorting_packages_part_2",
+                    "sorting_packages_part_3",
+                    "clean_the_desktop_addition",
+                    "clean_the_desktop_part_1",
+                    "clean_the_desktop_part_2",
+                ),
+                asset_id=os.getenv("ACOT_CHALLENGE_GENERALIST_ASSET_ID", "reasoning2action_sim_generalist"),
+                split_name="acot_challenge_generalist_lora_generalist",
+            ),
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=4e-5,
+            decay_steps=24_000,
+            decay_lr=4e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
+            os.getenv(
+                "ACOT_CHALLENGE_INIT_WEIGHTS",
+                "gs://openpi-assets/checkpoints/pi05_base/params",
+            )
+        ),
+        num_train_steps=24_000,
+        save_interval=1000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 100,
+        val_interval=1000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
+        val_num_batches=32 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
+        num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        batch_size=120 if not os.getenv("DEBUG_MODE", default=False) == "true" else 6,
+        grad_accum_steps=1 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        freeze_filter=_reasoning2action_lora_freeze_filter(),
+    ),
     # A dummy smoke run with only 1 task (2 parts)
     TrainConfig(
         name="acot_challenge_generalist_lora_clean_desktop",

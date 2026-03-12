@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-03-11
+Last updated: 2026-03-12
 
 ## Current State
 
@@ -20,7 +20,9 @@ Last updated: 2026-03-11
 - Added targeted model tests for the LoRA variant and ACoT freeze-filter behavior:
   - `src/openpi/models/acot_vla_test.py`
 - Added challenge-specific LoRA training configs:
-  - `acot_challenge_generalist_lora_all`
+  - `acot_challenge_generalist_lora_generalist`
+  - `acot_challenge_generalist_lora_clean_desktop`
+  - `acot_challenge_generalist_lora_5_tasks`
   - generated `acot_specialist_*` configs for the 9 challenge tasks
 - Added adapter-routing infrastructure for inference:
   - `scripts/extract_adapter.py`
@@ -35,11 +37,15 @@ Last updated: 2026-03-11
   - `scripts/docker/serve_policy.Dockerfile` starts `scripts/server_routed.sh` unless `SERVER_SCRIPT` overrides it
 - Added a plain checkpoint-serving launch path for single-model test submissions:
   - `scripts/server_checkpoint.sh`
-  - intended for configs like `acot_challenge_generalist_lora_clean_desktop`
+  - currently the most realistic single-model serve path for the retained generalist checkpoint
 - Updated the serve launch scripts for the current `tyro` CLI subcommand format:
   - `scripts/server_checkpoint.sh` now invokes `serve_policy.py policy:checkpoint`
   - `scripts/server_routed.sh` now invokes `serve_policy.py policy:adapter-routed`
   - this fixes the previous `Unrecognized options: --policy` startup failure
+- The routed serve script still has stale defaults:
+  - `scripts/server_routed.sh` points to `acot_challenge_generalist_lora_all`
+  - that config name does not exist in current `src/openpi/training/config.py`
+  - routed serving should currently be treated as an opt-in path that requires explicit env overrides
 - Adjusted Python packaging for the current Ubuntu 22.04 / Python 3.11 environment:
   - pinned transitive `av` resolution to `14.0.1` via `tool.uv.override-dependencies`
   - replaced deprecated `tool.uv.dev-dependencies` in `packages/openpi-client/pyproject.toml`
@@ -65,6 +71,25 @@ Last updated: 2026-03-11
   - `compute_loss_per_example(...)`
   - `teacher_force_actions(...)`
   - used for offline validation metrics without rollout
+
+## Current Retained Artifacts
+
+- The currently retained main experiment is:
+  - `checkpoints/acot_challenge_generalist_lora_generalist/generalist_v1_bs96`
+- That experiment currently has:
+  - one saved checkpoint at step `5000`
+  - `train_metrics.jsonl` entries through step `8500`
+  - best recorded validation loss `0.1684` at step `7000`
+  - last recorded train loss `0.0787`
+- Practical implication:
+  - the most useful current training line is the retained generalist single-model path
+  - the best visible val step has not been retained as a checkpoint yet
+- Historical clean-desktop logs show a successful save at step `10000`, but that checkpoint tree is not retained in the current workspace.
+- No `adapters/` directory or extracted adapter `.npz` files are present in the current workspace.
+- Fast-path assets currently present in-worktree are limited to:
+  - subtask-index cache files
+  - a prompt-token cache artifact for the generalist config
+  - there is not yet a retained real generic frame-cache root built from full data
 
 ## Dataset Understanding
 
@@ -92,6 +117,15 @@ Last updated: 2026-03-11
 - Finetuning runs now emit richer training diagnostics during `scripts/train.py`, including train loss, per-task train loss when task metadata is present, learning rate, grad norm, param norm, throughput, wall-clock time, checkpoint events, and batch-level action MAE metrics to both W&B and `train_metrics.jsonl` inside the experiment checkpoint directory; the W&B metric families are now explicitly defined so these series show up with stable step axes.
 - Offline eval for ACOT checkpoints now preserves dynamic data-config attributes such as `joint_action_shifts` when injecting checkpoint norm stats, fixing the `AttributeError: 'DataConfig' object has no attribute 'joint_action_shifts'` crash seen on clean-desktop checkpoint evaluation.
 - Offline eval now also marks the `train` kwarg as static when JIT-compiling `compute_loss_per_example`, fixing the `TracerBoolConversionError` raised inside `preprocess_observation()` during teacher-forced ACOT evaluation.
+- Submission packaging guidance is now documented for coding agents in `AGENTS/runbook_submission.md`:
+  - create and freeze a dedicated `submit-*` branch after a verified local serve test
+  - perform Docker packaging in an isolated clone/worktree of that branch
+  - prune non-serving files there before image build
+  - use an isolated submission repo/worktree
+  - stage the final checkpoint under `checkpoint/` and remove `train_state/`
+  - do not overlay the official base image's `/app`; use `/submission`
+  - do not use `uv run` at container startup
+  - prefetch tokenizer assets during `docker build`
 - `scripts/compute_norm_stats.py` now uses `SafeDataset` and respects its local shuffle flag, so isolated bad samples no longer crash worker batches or leave norm-stat accumulation empty; empty fully-skipped batches are also ignored by `TorchDataLoader`.
 - `scripts/eval_offline.py` now shows a per-checkpoint tqdm progress bar during validation-batch evaluation.
 - `TorchDataLoader` now skips incomplete post-filter batches as well, preventing multi-device `device_put` failures when `SafeDataset` drops bad samples and the remaining batch size is no longer divisible by the data-parallel mesh size.
@@ -116,6 +150,7 @@ Last updated: 2026-03-11
   - undocumented aliases such as `grab_toy -> place_block_into_box` should not remain in the final ICRA router
   - same-task folders with `_part_*` suffixes are storage shards of one task and should be merged into the same task family during training
 - Current code/doc mismatches are now explicit:
+  - `acot_challenge_generalist_lora_all` is still referenced in older docs and routed-serving defaults, but the current codebase does not define that config
   - `src/openpi/policies/adapter_routed_policy.py` still carries the legacy alias `grab_toy -> place_block_into_box`
   - `acot_specialist_stock_shelf` and `acot_specialist_sorting` currently do not include all known shards of their task families, even though the full generalist config already includes `stock_and_straighten_shelf_part_2` and `sorting_packages_part_3`
 - Added an additive fast-training path for the full generalist workflow:
@@ -163,9 +198,15 @@ Last updated: 2026-03-11
   - raw state and raw action windows
   - prompt/task/frame metadata
   - it does not store normalized/tokenized/padded model-ready samples
+- Fast path should still be treated as additive rather than primary:
+  - there is no retained real cache-backed training run in the current workspace
+  - no retained throughput benchmark shows a clear win on the target machine yet
+  - `scripts/train_fast.py` still needs a checkpoint-save fix before it can be promoted as the default launcher
 
 ## Known Open Work
 
+- Continue the retained `acot_challenge_generalist_lora_generalist` line to at least the next saved checkpoint boundary and keep the best-val step as a real checkpoint, not only in `train_metrics.jsonl`.
+- Run `scripts/eval_offline.py` on the retained generalist checkpoint tree and use it for checkpoint selection on the current mainline.
 - Finish or verify full extraction of all dataset parts.
 - Validate a small debug training run on the actual target machine with `grad_accum_steps > 1`.
 - Validate the new episode-split training path end-to-end on the clean-desktop smoke config and confirm validation loss logs as expected.
@@ -183,6 +224,7 @@ Last updated: 2026-03-11
   - `acot_specialist_sorting` should include `sorting_packages_part_1`, `sorting_packages_part_2`, and `sorting_packages_part_3`
 - Audit other task families for future `_part_*` shards and fold them into the same-task configs rather than creating new route keys.
 - Record one real end-to-end routed-serving validation run with extracted adapters so the routing path is validated beyond static code inspection.
+- Fix the current `scripts/train_fast.py` checkpoint-save path before promoting fast training as a primary launcher.
 - Re-validate additive fast-path runtime behavior on the intended hardware, especially:
   - startup time improvement from subtask-index caching
   - compatibility with validation loader and `scripts/eval_offline.py`

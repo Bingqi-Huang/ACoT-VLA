@@ -18,6 +18,63 @@ Immediate next step:
 
 ## Current Note
 
+Date: 2026-03-12
+
+Author: Codex
+
+What changed:
+
+- Pulled `AGENTS/status.md`, `AGENTS/PLAN.md`, `AGENTS/runbook_training.md`, and `Training_Notes.md` back toward the current codebase and retained artifacts.
+- Replaced the removed generalist config name `acot_challenge_generalist_lora_all` in active training guidance with `acot_challenge_generalist_lora_generalist`.
+- Updated docs to reflect the retained generalist artifact shape:
+  - experiment name `generalist_v1_bs96`
+  - one retained saved checkpoint at step `5000`
+  - metrics recorded through step `8500`
+- Documented that fast-path training is still additive and should not be treated as the default launcher yet.
+
+What was verified:
+
+- The updated docs now match the current active config names in `src/openpi/training/config.py`.
+- The updated docs now match the retained experiment naming under `checkpoints/acot_challenge_generalist_lora_generalist/`.
+
+What is still broken or unknown:
+
+- `scripts/server_routed.sh` still carries stale built-in defaults and must be overridden explicitly.
+- `scripts/train_fast.py` still needs a checkpoint-save fix before it can be promoted to the main training entrypoint.
+
+Immediate next step:
+
+- Continue the retained generalist run to the next checkpoint boundary, then use offline eval plus checkpoint serving on that line before revisiting routed serving or fast-path promotion.
+
+Date: 2026-03-11
+
+Author: Codex
+
+What changed:
+
+- Replaced the placeholder submission runbook with a concrete agent-facing Docker packaging workflow in `AGENTS/runbook_submission.md`.
+- The runbook now records the submission-specific lessons from the generalist checkpoint image:
+  - use an isolated submission repo/worktree
+  - stage the serving checkpoint under `checkpoint/`
+  - remove `train_state/` before building
+  - avoid `/app` because the official base image already contains a repo there
+  - use `/submission` plus explicit `PYTHONPATH`
+  - do not use `uv run` at container startup
+  - prefetch tokenizer assets during `docker build`
+
+What was verified:
+
+- The documented pitfalls match the behavior observed during the successful generalist image submission workflow.
+- The runbook now includes concrete launcher and Dockerfile templates instead of placeholders.
+
+What is still broken or unknown:
+
+- The runbook is currently written around the single-checkpoint generalist submission path; routed/adaptor submission should reuse the packaging rules but still needs its own final image template.
+
+Immediate next step:
+
+- Reuse `AGENTS/runbook_submission.md` as the starting point for the next submission image instead of rebuilding the packaging workflow from memory.
+
 Date: 2026-03-11
 
 Author: Codex

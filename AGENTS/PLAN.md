@@ -1,5 +1,14 @@
 # Plan: Task-Routed LoRA Adapters for Reasoning2Action Challenge
 
+## Current-State Note
+
+This document remains the routed-adapter long-range plan. For the active codebase:
+
+- the current generalist training config is `acot_challenge_generalist_lora_generalist`, not `acot_challenge_generalist_lora_all`
+- the retained generalist experiment name is `generalist_v1_bs96`
+- routed serving exists in code, but it is not yet the verified primary submission path
+- whenever this document says `acot_challenge_generalist_lora_all`, read it as the current generalist LoRA line in `src/openpi/training/config.py`
+
 ## 1. Strategy Summary
 
 Train one **generalist** ACoT-VLA model with LoRA on all three Gemma branches, then fine-tune **9 specialist adapters** from it. At inference, route on `payload["task_name"]`, which in the current Genie Sim ICRA chain is the **sub-task key** rather than the outer benchmark scene name. This yields **10 public route keys backed by 9 specialist adapters** because `sorting_packages_continuous` should reuse the `sorting_packages` adapter. This gives the specialization benefit of separate models at the memory cost of ~1.3 models.
@@ -158,7 +167,7 @@ Acceptance:
 
 **File:** `src/openpi/training/config.py` — add new `TrainConfig` entry before the closing `]` of `_CONFIGS`.
 
-**Config name:** `acot_challenge_generalist_lora_all`
+**Config name:** `acot_challenge_generalist_lora_generalist`
 
 Key differences from the baseline `acot_icra_simulation_challenge_reasoning_to_action_local`:
 - `coarse_action_expert_variant="gemma_300m_lora"` (was `"gemma_300m"`)
@@ -230,7 +239,7 @@ All specialists must use the **generalist's norm stats**, not task-specific stat
 
 For the generalist: compute norm stats before first training.
 ```bash
-uv run scripts/compute_norm_stats.py --config-name acot_challenge_generalist_lora_all
+uv run scripts/compute_norm_stats.py --config-name acot_challenge_generalist_lora_generalist
 ```
 
 For specialists: set `asset_id` in the `AssetsConfig` to point to the generalist's computed stats directory. The specialist configs should also set `assets_dir` to the same path as the generalist.
@@ -241,10 +250,10 @@ For specialists: set `asset_id` in the `AssetsConfig` to point to the generalist
 
 ```bash
 # Compute norm stats
-uv run scripts/compute_norm_stats.py --config-name acot_challenge_generalist_lora_all
+uv run scripts/compute_norm_stats.py --config-name acot_challenge_generalist_lora_generalist
 
 # Train (3xA100 40G, no FSDP)
-bash scripts/train.sh acot_challenge_generalist_lora_all generalist_v1
+bash scripts/train.sh acot_challenge_generalist_lora_generalist generalist_v1_bs96
 ```
 
 Acceptance:
@@ -262,7 +271,7 @@ bash scripts/train.sh acot_specialist_pour_workpiece specialist_v1
 
 Each specialist's `CheckpointWeightLoader` must point to the generalist's best checkpoint:
 ```
-checkpoints/acot_challenge_generalist_lora_all/generalist_v1/<best_step>/params
+checkpoints/acot_challenge_generalist_lora_generalist/generalist_v1_bs96/<best_step>/params
 ```
 
 ## 7. Adapter Extraction
@@ -309,7 +318,7 @@ uv run python scripts/extract_adapter.py \
 Extract the generalist's adapter params as the **fallback adapter** for unknown task names:
 ```bash
 uv run python scripts/extract_adapter.py \
-    --checkpoint checkpoints/acot_challenge_generalist_lora_all/generalist_v1/50000 \
+    --checkpoint checkpoints/acot_challenge_generalist_lora_generalist/generalist_v1_bs96/<selected_step> \
     --output adapters/_default.npz
 ```
 
@@ -449,7 +458,7 @@ export PYTHONPATH=/root/openpi/src:${PYTHONPATH:-/app:/app/src}
 GIT_LFS_SKIP_SMUDGE=1 uv run python scripts/serve_policy.py \
     --port ${port} \
     --policy adapter-routed \
-    --policy.config acot_challenge_generalist_lora_all \
+    --policy.config acot_challenge_generalist_lora_generalist \
     --policy.base-checkpoint ./checkpoints/generalist/params \
     --policy.adapter-dir ./adapters
 ```

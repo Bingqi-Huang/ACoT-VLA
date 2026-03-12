@@ -1,3 +1,11 @@
+# Training Notes
+
+Current mainline note:
+
+- the actively retained single-model training line in this workspace is `acot_challenge_generalist_lora_generalist`
+- the clean-desktop path below is still useful as a smoke path, but its old checkpoint examples should be treated as placeholders unless that experiment is re-run and retained
+- routed serving and fast-path training both exist in code, but neither should be treated as the default entrypoint yet
+
 # Clean Desktop Test-Server Plan
 
 This note is for a **single-model test submission** using `acot_challenge_generalist_lora_clean_desktop`.
@@ -57,7 +65,7 @@ mkdir -p "${UV_CACHE_DIR}"
 
 ## Fast path for `acot_challenge_generalist_lora_generalist`
 
-The current recommended fast route for this config is:
+The current recommended experimental fast route for this config is:
 
 1. build the generic `Reasoning2Action-Sim` frame cache
 2. verify the cache against raw data
@@ -71,6 +79,12 @@ This path is additive:
 - cache path: generic frame cache plus `train_fast.py --r2a-cache-root ...`
 
 It does **not** change checkpoint format, offline eval compatibility, or final inference / Docker serving.
+
+Current caveat:
+
+- do not make `scripts/train_fast.py` the default launcher yet
+- there is still no retained real cache-backed training run in this workspace
+- `scripts/train_fast.py` still needs a checkpoint-save fix before it is safe as the primary path
 
 ### Scope and caveat
 
@@ -259,8 +273,8 @@ Use debug mode first:
 
 ```bash
 DEBUG_MODE=true uv run python scripts/train.py \
-    acot_challenge_generalist_lora_generalist \
-    --exp_name generalist_v1_bs96 \
+    acot_challenge_generalist_lora_clean_desktop \
+    --exp_name clean_desktop_debug \
     --overwrite
 ```
 
@@ -277,8 +291,8 @@ When the debug run is clean:
 
 ```bash
 bash scripts/train.sh \
-  acot_challenge_generalist_lora_generalist \
-  generalist_v1_bs96 \
+  acot_challenge_generalist_lora_clean_desktop \
+  clean_desktop_v1 \
   --val-interval=1000 \
   --val-num-batches=8 \
 #   --resume=true Choose between two
@@ -303,10 +317,10 @@ Expected checkpoint root:
 Expected final-step checkpoint example:
 
 ```bash
-./checkpoints/acot_challenge_generalist_lora_clean_desktop/clean_desktop_v1/50000
+./checkpoints/acot_challenge_generalist_lora_clean_desktop/clean_desktop_v1/<selected_step>
 ```
 
-If you choose an earlier step, use the real step directory everywhere below.
+Use the real saved step directory everywhere below. The current workspace does not retain a clean-desktop checkpoint tree, so treat this section as a smoke-workflow template rather than a live retained artifact.
 
 ## 5. Serve the trained checkpoint locally
 
@@ -314,7 +328,7 @@ Set the checkpoint to serve:
 
 ```bash
 export ACOT_SERVE_CONFIG=acot_challenge_generalist_lora_clean_desktop
-export ACOT_SERVE_CHECKPOINT=./checkpoints/acot_challenge_generalist_lora_clean_desktop/clean_desktop_v1/50000
+export ACOT_SERVE_CHECKPOINT=./checkpoints/acot_challenge_generalist_lora_clean_desktop/clean_desktop_v1/<selected_step>
 ```
 
 Start the websocket server:
@@ -362,7 +376,7 @@ Run locally:
 docker run --rm -p 8999:8999 \
     -e SERVER_SCRIPT=./scripts/server_checkpoint.sh \
     -e ACOT_SERVE_CONFIG=acot_challenge_generalist_lora_clean_desktop \
-    -e ACOT_SERVE_CHECKPOINT=./checkpoints/acot_challenge_generalist_lora_clean_desktop/clean_desktop_v1/50000 \
+    -e ACOT_SERVE_CHECKPOINT=./checkpoints/acot_challenge_generalist_lora_clean_desktop/clean_desktop_v1/<selected_step> \
     acot-clean-desktop-test
 ```
 
@@ -415,7 +429,7 @@ export ACOT_CHALLENGE_DATA_ROOT=~/Datasets/lerobot/Reasoning2Action-Sim
 export UV_CACHE_DIR=/tmp/uv-cache
 mkdir -p "${UV_CACHE_DIR}"
 uv run python scripts/compute_norm_stats.py --config-name acot_challenge_generalist_lora_clean_desktop
-DEBUG_MODE=true uv run python scripts/train.py --config-name acot_challenge_generalist_lora_clean_desktop --exp_name clean_desktop_debug --overwrite
+DEBUG_MODE=true uv run python scripts/train.py acot_challenge_generalist_lora_clean_desktop --exp_name clean_desktop_debug --overwrite
 ```
 
 ---
@@ -483,7 +497,7 @@ This must run before training the full generalist config:
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/compute_norm_stats.py \
-    --config-name acot_challenge_generalist_lora_all
+    --config-name acot_challenge_generalist_lora_generalist
 ```
 
 This should write stats into the assets dir used by the config.
@@ -494,7 +508,7 @@ First smoke test the accumulation path:
 
 ```bash
 DEBUG_MODE=true UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/train.py \
-    --config-name acot_challenge_generalist_lora_all \
+    acot_challenge_generalist_lora_generalist \
     --exp_name generalist_debug \
     --overwrite
 ```
@@ -511,15 +525,15 @@ Check:
 If debug is clean:
 
 ```bash
-bash scripts/train.sh acot_challenge_generalist_lora_all generalist_v1
+bash scripts/train.sh acot_challenge_generalist_lora_generalist generalist_v1_bs96
 ```
 
 Or directly:
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/train.py \
-    --config-name acot_challenge_generalist_lora_all \
-    --exp_name generalist_v1
+    acot_challenge_generalist_lora_generalist \
+    --exp_name generalist_v1_bs96
 ```
 
 Wait until you have a usable checkpoint, ideally the target final step.
@@ -529,10 +543,10 @@ Wait until you have a usable checkpoint, ideally the target final step.
 Export the checkpoint path:
 
 ```bash
-export ACOT_CHALLENGE_GENERALIST_WEIGHTS=./checkpoints/acot_challenge_generalist_lora_all/generalist_v1/50000/params
+export ACOT_CHALLENGE_GENERALIST_WEIGHTS=./checkpoints/acot_challenge_generalist_lora_generalist/generalist_v1_bs96/<selected_step>/params
 ```
 
-If your best step is not `50000`, use the real step directory.
+Use the real saved step directory. In the current workspace, the retained generalist example is `./checkpoints/acot_challenge_generalist_lora_generalist/generalist_v1_bs96/5000`.
 
 ## 6. Run one specialist debug job first
 
@@ -581,7 +595,7 @@ Extract the fallback generalist adapter:
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/extract_adapter.py \
-    --checkpoint ./checkpoints/acot_challenge_generalist_lora_all/generalist_v1/50000 \
+    --checkpoint ./checkpoints/acot_challenge_generalist_lora_generalist/generalist_v1_bs96/<selected_step> \
     --output ./adapters/_default.npz
 ```
 
@@ -600,10 +614,15 @@ Repeat for the others.
 Set the runtime paths:
 
 ```bash
-export ACOT_ROUTED_CONFIG=acot_challenge_generalist_lora_all
-export ACOT_ROUTED_BASE_CHECKPOINT=./checkpoints/acot_challenge_generalist_lora_all/generalist_v1/50000
+export ACOT_ROUTED_CONFIG=acot_challenge_generalist_lora_generalist
+export ACOT_ROUTED_BASE_CHECKPOINT=./checkpoints/acot_challenge_generalist_lora_generalist/generalist_v1_bs96/<selected_step>
 export ACOT_ROUTED_ADAPTER_DIR=./adapters
 ```
+
+Important:
+
+- `scripts/server_routed.sh` still has stale built-in defaults pointing at `acot_challenge_generalist_lora_all`
+- always set the routed env vars explicitly until that script is cleaned up
 
 Start the server:
 
@@ -648,8 +667,8 @@ Run it:
 ```bash
 docker run --rm -p 8999:8999 \
     -e SERVER_SCRIPT=./scripts/server_routed.sh \
-    -e ACOT_ROUTED_CONFIG=acot_challenge_generalist_lora_all \
-    -e ACOT_ROUTED_BASE_CHECKPOINT=./checkpoints/acot_challenge_generalist_lora_all/generalist_v1/50000 \
+    -e ACOT_ROUTED_CONFIG=acot_challenge_generalist_lora_generalist \
+    -e ACOT_ROUTED_BASE_CHECKPOINT=./checkpoints/acot_challenge_generalist_lora_generalist/generalist_v1_bs96/<selected_step> \
     -e ACOT_ROUTED_ADAPTER_DIR=./adapters \
     acot-routed
 ```
@@ -694,8 +713,8 @@ Before final submission, the code plan should be:
 
 ```bash
 export ACOT_CHALLENGE_DATA_ROOT=~/Datasets/lerobot/Reasoning2Action-Sim
-UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/compute_norm_stats.py --config-name acot_challenge_generalist_lora_all
-DEBUG_MODE=true UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/train.py --config-name acot_challenge_generalist_lora_all --exp_name generalist_debug --overwrite
+UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/compute_norm_stats.py --config-name acot_challenge_generalist_lora_generalist
+DEBUG_MODE=true UV_CACHE_DIR=/tmp/uv-cache uv run python scripts/train.py acot_challenge_generalist_lora_generalist --exp_name generalist_debug --overwrite
 ```
 
 ## 15. Reasoning2Action generic frame-cache fast path

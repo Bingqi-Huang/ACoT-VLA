@@ -16,7 +16,7 @@ ENV ACOT_SERVE_CONFIG=acot_challenge_generalist_lora_generalist
 ENV ACOT_SERVE_CHECKPOINT=/submission/checkpoint/generalists-v1-10000
 ENV PYTHONPATH=/submission:/submission/src:/submission/packages/openpi-client/src
 
-RUN python3 -c "from openpi.models.tokenizer import PaligemmaTokenizer; PaligemmaTokenizer()"
+RUN /.venv/bin/python3 -c "from openpi.models.tokenizer import PaligemmaTokenizer; PaligemmaTokenizer()"
 
 EXPOSE 8999
 

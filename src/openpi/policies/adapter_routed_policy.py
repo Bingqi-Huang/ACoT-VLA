@@ -24,18 +24,13 @@ logger = logging.getLogger(__name__)
 
 PATHS_KEY = "__paths__"
 VALUE_KEY_TEMPLATE = "param_{index:04d}"
+# Route only weak tasks to specialists; strong tasks fall through to _default (baseline).
+# This minimizes risk of regression on tasks already near-perfect.
 TASK_ROUTING = {
-    "pour_workpiece": "pour_workpiece",
-    "open_door": "open_door",
-    "scoop_popcorn": "scoop_popcorn",
-    "hold_pot": "hold_pot",
-    "place_block_into_box": "place_block_into_box",
-    "grab_toy": "place_block_into_box",
-    "take_wrong_item_shelf": "take_wrong_item_shelf",
-    "stock_and_straighten_shelf": "stock_and_straighten_shelf",
-    "sorting_packages": "sorting_packages",
-    "sorting_packages_continuous": "sorting_packages",
-    "clean_the_desktop": "clean_the_desktop",
+    "clean_the_desktop": "acot_specialist_clean_desktop",
+    "stock_and_straighten_shelf": "acot_specialist_stock_shelf",
+    "place_block_into_box": "acot_specialist_place_block",
+    "grab_toy": "acot_specialist_place_block",
 }
 
 

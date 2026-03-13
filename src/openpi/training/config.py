@@ -1457,10 +1457,17 @@ def _reasoning2action_data_config(
 
 def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
     generalist_asset_id = os.getenv("ACOT_CHALLENGE_GENERALIST_ASSET_ID", "reasoning2action_sim_generalist")
+    # Fall back to baseline checkpoint if no generalist checkpoint is available.
     generalist_weights = os.getenv(
         "ACOT_CHALLENGE_GENERALIST_WEIGHTS",
-        "./checkpoints/acot_challenge_generalist_lora_all/generalist_v1/50000/params",
+        os.getenv(
+            "ACOT_CHALLENGE_INIT_WEIGHTS",
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+        ),
     )
+    # Use ACOTCheckpointWeightLoader when initializing from baseline to handle
+    # the dual-expert weight remapping correctly.
+    use_baseline_init = "ACOT_CHALLENGE_GENERALIST_WEIGHTS" not in os.environ
 
     specialist_configs = []
     for config_name, dataset_names, prompt_keys in _REASONING2ACTION_SPECIALIST_SPECS:
@@ -1475,16 +1482,20 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
                     split_name=config_name,
                 ),
                 lr_schedule=_optimizer.CosineDecaySchedule(
-                    warmup_steps=500,
-                    peak_lr=2e-5,
-                    decay_steps=10_000,
-                    decay_lr=2e-6,
+                    warmup_steps=200,
+                    peak_lr=1e-5,
+                    decay_steps=5_000,
+                    decay_lr=1e-6,
                 ),
                 optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-                ema_decay=0.999,
-                weight_loader=weight_loaders.CheckpointWeightLoader(generalist_weights),
-                num_train_steps=10_000,
-                save_interval=1000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
+                ema_decay=None,
+                weight_loader=(
+                    weight_loaders.ACOTCheckpointWeightLoader(generalist_weights)
+                    if use_baseline_init
+                    else weight_loaders.CheckpointWeightLoader(generalist_weights)
+                ),
+                num_train_steps=5_000,
+                save_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
                 num_workers=16 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
                 batch_size=18 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
                 grad_accum_steps=4 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
@@ -2378,7 +2389,7 @@ _CONFIGS = [
             split_name="acot_challenge_generalist_baseline_compatible",
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=10_000,
+            warmup_steps=500,
             peak_lr=2e-5,
             decay_steps=40_000,
             decay_lr=4e-6,
@@ -2445,6 +2456,57 @@ _CONFIGS = [
         num_train_steps=5_000,
         save_interval=1000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 100,
         val_interval=1000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
+        val_num_batches=32 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
+        num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        batch_size=120 if not os.getenv("DEBUG_MODE", default=False) == "true" else 6,
+        grad_accum_steps=1 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        freeze_filter=_reasoning2action_lora_freeze_filter(),
+    ),
+    # Conservative LoRA generalist: low LR, short run, dense checkpoints.
+    # Designed to improve weak tasks without forgetting strong ones.
+    TrainConfig(
+        name="acot_challenge_lora_conservative",
+        model=_reasoning2action_lora_model(),
+        data=dataclasses.replace(
+            _reasoning2action_data_config(
+                _reasoning2action_repo_ids(
+                    "pour_workpiece",
+                    "open_door",
+                    "scoop_popcorn",
+                    "scoop_popcorn_part_2",
+                    "hold_pot",
+                    "place_block_into_box",
+                    "take_wrong_item_shelf",
+                    "stock_and_straighten_shelf",
+                    "stock_and_straighten_shelf_part_2",
+                    "sorting_packages_part_1",
+                    "sorting_packages_part_2",
+                    "sorting_packages_part_3",
+                    "clean_the_desktop_addition",
+                    "clean_the_desktop_part_1",
+                    "clean_the_desktop_part_2",
+                ),
+                asset_id=os.getenv("ACOT_CHALLENGE_GENERALIST_ASSET_ID", "reasoning2action_sim_generalist"),
+                split_name="acot_challenge_generalist_lora_generalist",
+            ),
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=200,
+            peak_lr=1e-5,
+            decay_steps=8_000,
+            decay_lr=1e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
+            os.getenv(
+                "ACOT_CHALLENGE_INIT_WEIGHTS",
+                "gs://openpi-assets/checkpoints/pi05_base/params",
+            )
+        ),
+        num_train_steps=8_000,
+        save_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 100,
+        val_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
         val_num_batches=32 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
         num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         batch_size=120 if not os.getenv("DEBUG_MODE", default=False) == "true" else 6,

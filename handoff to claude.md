@@ -18,7 +18,7 @@ This handoff intentionally includes the evaluation details supplied by the user,
 - Main training launcher in active use: `scripts/train.sh`
 - Fast path also exists: `scripts/train_fast.py` and `scripts/train_fast.sh`
 - Current date of this session: 2026-03-13
-- User has local retained checkpoints from the generalist line and also has a local baseline checkpoint:
+- User has local retained checkpoints from the generalist line and also has a local baseline checkpoint(these are not avaliable on the machine that claude presents, those are on the training machine, but they do exist):
   - `checkpoints/baseline_checkpoint/params`
   - `checkpoints/acot_challenge_generalist_lora_generalist/generalist_v1_bs96/...`
 

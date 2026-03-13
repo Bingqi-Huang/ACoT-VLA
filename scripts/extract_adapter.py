@@ -23,16 +23,18 @@ ADAPTER_PATTERNS = (
     "explicit_action_reason_proj",
     "implicit_action_reason_proj",
 )
+LORA_ONLY_PATTERNS = ("lora",)
 PATHS_KEY = "__paths__"
 VALUE_KEY_TEMPLATE = "param_{index:04d}"
 
 
-def main(checkpoint: str, output: str) -> None:
+def main(checkpoint: str, output: str, lora_only: bool = False) -> None:
+    patterns = LORA_ONLY_PATTERNS if lora_only else ADAPTER_PATTERNS
     checkpoint_path = pathlib.Path(checkpoint)
     params = _model.restore_params(checkpoint_path / "params", restore_type=np.ndarray)
     flat_params = flax.traverse_util.flatten_dict(params, sep="/")
 
-    filtered = {path: value for path, value in flat_params.items() if any(pattern in path for pattern in ADAPTER_PATTERNS)}
+    filtered = {path: value for path, value in flat_params.items() if any(pattern in path for pattern in patterns)}
     if not filtered:
         raise ValueError(f"No adapter parameters matched under checkpoint: {checkpoint_path}")
 

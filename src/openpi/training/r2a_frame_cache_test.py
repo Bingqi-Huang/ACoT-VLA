@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import pathlib
+import mmap
 
 import numpy as np
 
 import openpi.training.config as _config
 import openpi.training.r2a_frame_cache as r2a_frame_cache
+
+
+def _base_object(value):
+    base = value
+    while getattr(base, "base", None) is not None:
+        base = base.base
+    return base
 
 
 def _write_fake_cache(cache_root: pathlib.Path) -> None:
@@ -136,6 +144,10 @@ def test_r2a_frame_cache_dataset_filters_repo_and_metadata(tmp_path: pathlib.Pat
     assert sample["frame_index"] == 2
     assert np.asarray(sample["episode_index"]).dtype == np.int64
     assert np.asarray(sample["frame_index"]).dtype == np.int64
+    assert sample["observation.state"].flags.owndata
+    assert not isinstance(_base_object(sample["observation.state"]), mmap.mmap)
+    assert sample["observation.images.hand_right"].flags.owndata
+    assert not isinstance(_base_object(sample["observation.images.hand_right"]), mmap.mmap)
     assert sample["observation.images.hand_right"].shape == (224, 224, 3)
     np.testing.assert_array_equal(dataset.selected_subtask_indices(), np.asarray([0], dtype=np.int64))
 

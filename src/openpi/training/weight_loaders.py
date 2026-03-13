@@ -46,16 +46,26 @@ class CheckpointWeightLoader(WeightLoader):
     """
 
     params_path: str
+    missing_init: str = "random"
+    strict: bool = False
 
     def load(self, params: at.Params) -> at.Params:
         # We are loading np.ndarray and relying on the training code to properly convert and shard the params.
         loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
         # Add all missing LoRA weights.
-        return _merge_params(loaded_params, params, missing_regex=".*lora.*")
+        return _merge_params(
+            loaded_params,
+            params,
+            missing_regex=".*lora.*",
+            init=self.missing_init,
+            strict=self.strict,
+        )
 
 @dataclasses.dataclass(frozen=True)
 class ACOTCheckpointWeightLoader(WeightLoader):
     params_path: str
+    missing_init: str = "random"
+    strict: bool = False
 
     def load(self, params: at.Params) -> at.Params:
         loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
@@ -78,7 +88,13 @@ class ACOTCheckpointWeightLoader(WeightLoader):
                 loaded_params[target_key] = loaded_params[source_key]
                 print(f"[INFO] Re-mapped pretrained weight '{source_key}' -> '{target_key}' (for Reasoner)")
                 
-        return _merge_params(loaded_params, params, missing_regex=".*")
+        return _merge_params(
+            loaded_params,
+            params,
+            missing_regex=".*",
+            init=self.missing_init,
+            strict=self.strict,
+        )
 
 @dataclasses.dataclass(frozen=True)
 class PaliGemmaWeightLoader(WeightLoader):
@@ -101,7 +117,7 @@ class PaliGemmaWeightLoader(WeightLoader):
 
 def _align_param(expected, loaded, init_method):
     if expected.shape == loaded.shape:
-        return loaded.astype(expected.dtype)
+        return loaded.astype(expected.dtype), None
 
     min_shape = tuple(min(e, l) for e, l in zip(expected.shape, loaded.shape))
     slices = tuple(slice(0, m) for m in min_shape)
@@ -114,22 +130,61 @@ def _align_param(expected, loaded, init_method):
         raise ValueError(f"Unknown init method: {init_method}")
 
     new_param = new_param.at[slices].set(loaded[slices])
-    print(f"[WARN] Shape mismatch: expected {expected.shape}, got {loaded.shape}, truncated to {min_shape}")
-    return new_param
+    return new_param, (expected.shape, loaded.shape, min_shape)
 
-def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex: str, init="random") -> at.Params:
+def _summarize_items(items: list[str], *, limit: int = 8) -> str:
+    if len(items) <= limit:
+        return ", ".join(items)
+    return ", ".join(items[:limit]) + f", ... (+{len(items) - limit} more)"
+
+
+def _raise_incompatible_checkpoint(
+    *,
+    missing_paths: list[str],
+    shape_mismatches: list[str],
+) -> None:
+    details = []
+    if missing_paths:
+        details.append(f"missing params ({len(missing_paths)}): {_summarize_items(missing_paths)}")
+    if shape_mismatches:
+        details.append(f"shape mismatches ({len(shape_mismatches)}): {_summarize_items(shape_mismatches)}")
+    raise ValueError("Checkpoint is not init-compatible with this config: " + "; ".join(details))
+
+
+def _merge_params(
+    loaded_params: at.Params,
+    params: at.Params,
+    *,
+    missing_regex: str,
+    init="random",
+    strict: bool = False,
+) -> at.Params:
+    loaded_params = _model.convert_str_keys_to_int(loaded_params)
+    params = _model.convert_str_keys_to_int(params)
 
     flat_ref = flax.traverse_util.flatten_dict(params, sep=None)
     flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep=None)
 
     result = {}
+    shape_mismatches: list[str] = []
     for k, v in flat_loaded.items():
         if k in flat_ref:
-            result[k] = _align_param(flat_ref[k], v, init)
+            aligned, mismatch = _align_param(flat_ref[k], v, init)
+            result[k] = aligned
+            if mismatch is not None:
+                expected_shape, loaded_shape, min_shape = mismatch
+                key_path = "/".join(map(str, k))
+                shape_mismatches.append(f"{key_path} expected {expected_shape}, got {loaded_shape}")
+                if not strict:
+                    print(f"[WARN] Shape mismatch: expected {expected_shape}, got {loaded_shape}, truncated to {min_shape}")
 
     pattern = re.compile(missing_regex)
 
     missing_keys = {k for k in flat_ref if pattern.fullmatch("/".join(map(str, k))) and k not in result}
+    missing_paths = ["/".join(map(str, k)) for k in sorted(missing_keys)]
+
+    if strict and (missing_paths or shape_mismatches):
+        _raise_incompatible_checkpoint(missing_paths=missing_paths, shape_mismatches=shape_mismatches)
     
     for k in missing_keys:
         key_path = "/".join(map(str, k))

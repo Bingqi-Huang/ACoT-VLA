@@ -56,6 +56,11 @@ _REPO_STAGE_INDEX_FIELDS = (
 )
 
 
+def _materialize_shard_sample(value: np.ndarray) -> np.ndarray:
+    # Copy shard slices immediately so a shuffled batch does not pin one mmap per touched shard.
+    return np.array(value, copy=True)
+
+
 @dataclasses.dataclass(frozen=True)
 class FieldSpec:
     name: str
@@ -671,8 +676,8 @@ class R2AFrameCacheDataset:
         prompt_index = int(self._index_arrays["prompt_index"][sample_index])
 
         sample = {
-            "observation.state": np.asarray(shard_arrays["observation.state"][shard_offset]),
-            "action": np.asarray(shard_arrays["action"][shard_offset]),
+            "observation.state": _materialize_shard_sample(shard_arrays["observation.state"][shard_offset]),
+            "action": _materialize_shard_sample(shard_arrays["action"][shard_offset]),
             "timestamp": np.float32(self._index_arrays["timestamp"][sample_index]),
             "episode_index": np.asarray(self._index_arrays["episode_index"][sample_index]),
             "frame_index": np.asarray(self._index_arrays["frame_index"][sample_index]),
@@ -681,7 +686,7 @@ class R2AFrameCacheDataset:
             "prompt": self._prompt_vocab[prompt_index],
         }
         for camera_key in _CAMERA_KEYS:
-            sample[camera_key] = np.asarray(shard_arrays[camera_key][shard_offset])
+            sample[camera_key] = _materialize_shard_sample(shard_arrays[camera_key][shard_offset])
         return sample
 
     def selected_subtask_indices(self) -> np.ndarray:

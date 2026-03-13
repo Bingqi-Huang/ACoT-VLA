@@ -1391,12 +1391,34 @@ def _reasoning2action_lora_model() -> acot_vla.ACOTConfig:
     )
 
 
+def _reasoning2action_baseline_compatible_model() -> acot_vla.ACOTConfig:
+    return acot_vla.ACOTConfig(
+        coarse_action_horizon=30,
+        action_horizon=30,
+        paligemma_variant="gemma_2b_lora",
+        adopt_explicit_action_reasoner=True,
+        adopt_implicit_action_reasoner=True,
+        downsample_based_implicit_extractor=True,
+        # Keep prompt capacity aligned with the current challenge configs.
+        max_token_len=210,
+    )
+
+
 def _reasoning2action_lora_freeze_filter() -> nnx.filterlib.Filter:
     return _reasoning2action_lora_model().get_freeze_filter(
         freeze_vision=True,
         freeze_llm=True,
         freeze_llm_embedder=True,
         freeze_dual_ae=[True, True],
+    )
+
+
+def _reasoning2action_baseline_compatible_freeze_filter() -> nnx.filterlib.Filter:
+    return _reasoning2action_baseline_compatible_model().get_freeze_filter(
+        freeze_vision=False,
+        freeze_llm=True,
+        freeze_llm_embedder=True,
+        freeze_dual_ae=[False, False],
     )
 
 
@@ -2331,6 +2353,52 @@ _CONFIGS = [
         grad_accum_steps=1 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         freeze_filter=_reasoning2action_lora_freeze_filter(),
     ),
+    TrainConfig(
+        name="acot_challenge_generalist_baseline_compatible",
+        model=_reasoning2action_baseline_compatible_model(),
+        data=_reasoning2action_data_config(
+            _reasoning2action_repo_ids(
+                "pour_workpiece",
+                "open_door",
+                "scoop_popcorn",
+                "scoop_popcorn_part_2",
+                "hold_pot",
+                "place_block_into_box",
+                "take_wrong_item_shelf",
+                "stock_and_straighten_shelf",
+                "stock_and_straighten_shelf_part_2",
+                "sorting_packages_part_1",
+                "sorting_packages_part_2",
+                "sorting_packages_part_3",
+                "clean_the_desktop_addition",
+                "clean_the_desktop_part_1",
+                "clean_the_desktop_part_2",
+            ),
+            asset_id=os.getenv("ACOT_CHALLENGE_GENERALIST_ASSET_ID", "reasoning2action_sim_generalist"),
+            split_name="acot_challenge_generalist_baseline_compatible",
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=2e-5,
+            decay_steps=40_000,
+            decay_lr=4e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
+            os.getenv(
+                "ACOT_CHALLENGE_INIT_WEIGHTS",
+                "gs://openpi-assets/checkpoints/pi05_base/params",
+            ),
+            strict=True,
+        ),
+        num_train_steps=10_000,
+        save_interval=5000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 200,
+        num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        batch_size=96 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
+        grad_accum_steps=1 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        freeze_filter=_reasoning2action_baseline_compatible_freeze_filter(),
+    ),
     # Recommended next-step generalist run: keep the same task mix/model and
     # current masking behavior, but shorten warmup, densify checkpointing, and
     # make online validation more representative.
@@ -2361,10 +2429,10 @@ _CONFIGS = [
             ),
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=2_000,
-            peak_lr=4e-5,
-            decay_steps=24_000,
-            decay_lr=4e-6,
+            warmup_steps=100,
+            peak_lr=2.5e-5,
+            decay_steps=5_000,
+            decay_lr=2.0e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=None,
@@ -2374,7 +2442,7 @@ _CONFIGS = [
                 "gs://openpi-assets/checkpoints/pi05_base/params",
             )
         ),
-        num_train_steps=24_000,
+        num_train_steps=5_000,
         save_interval=1000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 100,
         val_interval=1000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
         val_num_batches=32 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,

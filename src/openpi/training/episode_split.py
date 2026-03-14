@@ -165,13 +165,33 @@ def _build_manifest(data_config: _config.DataConfig) -> EpisodeSplitManifest:
     )
 
 
+class _LocalDatasetMetadata:
+    """Minimal metadata reader for local LeRobot datasets.
+
+    Reads episodes.jsonl directly to avoid LeRobotDatasetMetadata's
+    unconditional HuggingFace Hub version-check network call.
+    """
+
+    def __init__(self, repo_path: pathlib.Path) -> None:
+        episodes_file = repo_path / "meta" / "episodes.jsonl"
+        if not episodes_file.exists():
+            raise FileNotFoundError(f"No episodes.jsonl at {episodes_file}")
+        import json as _json
+        self.episodes = {}
+        with open(episodes_file) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                ep = _json.loads(line)
+                self.episodes[ep["episode_index"]] = {"length": ep["length"]}
+
+
 def _create_dataset_metadata(repo_id: str):
     repo_path = pathlib.Path(repo_id).expanduser()
     if repo_path.is_absolute():
-        try:
-            return lerobot_dataset.LeRobotDatasetMetadata(repo_path.name, root=repo_path)
-        except TypeError:
-            return lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+        # Always use local reader for absolute paths — never hit HF Hub.
+        return _LocalDatasetMetadata(repo_path)
     return lerobot_dataset.LeRobotDatasetMetadata(repo_id)
 
 

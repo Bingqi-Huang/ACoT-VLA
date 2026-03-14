@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 import copy
 import logging
+import os
 import pathlib
 import time
 from typing import Any
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 PATHS_KEY = "__paths__"
 VALUE_KEY_TEMPLATE = "param_{index:04d}"
 # Route only tasks that have a prepared adapter in the current submission package.
-# Other tasks fall through to _default (or _base if _default is unavailable).
+# Other tasks fall through to _base.
 TASK_ROUTING = {
     "clean_the_desktop": "clean_the_desktop_1500",
 }
@@ -88,15 +89,21 @@ def _build_policy_transforms(
 
 
 def _load_adapter_file(adapter_path: pathlib.Path) -> dict[tuple[str | int, ...], np.ndarray]:
+    def _to_infer_dtype(value: np.ndarray) -> jax.Array:
+        arr = jnp.asarray(value)
+        if jnp.issubdtype(arr.dtype, jnp.floating):
+            return arr.astype(jnp.bfloat16)
+        return arr
+
     with np.load(adapter_path, allow_pickle=False) as adapter_data:
         if PATHS_KEY in adapter_data.files:
             paths = adapter_data[PATHS_KEY].tolist()
             return {
-                _path_to_tuple(path): np.asarray(adapter_data[VALUE_KEY_TEMPLATE.format(index=index)])
+                _path_to_tuple(path): _to_infer_dtype(np.asarray(adapter_data[VALUE_KEY_TEMPLATE.format(index=index)]))
                 for index, path in enumerate(paths)
             }
 
-        return {_path_to_tuple(path): np.asarray(adapter_data[path]) for path in adapter_data.files}
+        return {_path_to_tuple(path): _to_infer_dtype(np.asarray(adapter_data[path])) for path in adapter_data.files}
 
 
 def create_adapter_routed_policy(
@@ -124,6 +131,11 @@ def create_adapter_routed_policy(
         str(checkpoint_dir / "params"),
         missing_init="zeros",
     ).load(params_shape)
+    # Match the fast checkpoint policy path: keep inference params in bfloat16 on JAX arrays.
+    base_params = jax.tree.map(
+        lambda x: (jnp.asarray(x).astype(jnp.bfloat16) if jnp.issubdtype(jnp.asarray(x).dtype, jnp.floating) else jnp.asarray(x)),
+        base_params,
+    )
 
     transforms, output_transforms = _build_policy_transforms(
         train_config,
@@ -159,20 +171,26 @@ class AdapterRoutedPolicy(_policy.Policy):
         self._model_config = model_config
         self._adapter_dir = pathlib.Path(adapter_dir)
         base_model = self._model_config.load(base_params)
-        _, self._base_state = nnx.split(base_model)
+        self._base_graphdef, self._base_state = nnx.split(base_model)
         self._base_state_flat = flax.traverse_util.flatten_dict(self._base_state.to_pure_dict())
         self._adapters = self._load_adapters(self._adapter_dir)
         self._state_cache: dict[str, nnx.State] = {}
+        self._sampler_cache: dict[str, Any] = {}
         self._current_adapter_name: str | None = None
-        self._current_state: nnx.State | None = None
-        self._sample_actions = nnx_utils.module_jit_with_state(base_model.sample_actions)
+        self._sample_actions = nnx_utils.module_jit(base_model.sample_actions)
         self._input_transform = _transforms.compose(transforms)
         self._output_transform = _transforms.compose(output_transforms)
         self._rng = rng or jax.random.key(0)
         self._sample_kwargs = sample_kwargs or {}
         self._metadata = metadata or {}
+        self._force_base = os.getenv("ACOT_ROUTE_FORCE_BASE", "").lower() in {"1", "true", "yes", "on"}
 
-        initial_adapter = "_default" if "_default" in self._adapters else next(iter(self._adapters), "_base")
+        if self._force_base:
+            logger.warning("ACOT_ROUTE_FORCE_BASE is enabled; all tasks will use _base.")
+
+        logger.info("Loaded adapters from %s: %s", self._adapter_dir, sorted(self._adapters.keys()))
+
+        initial_adapter = "_base"
         self._activate_adapter(initial_adapter)
 
     def _load_adapters(self, adapter_dir: pathlib.Path) -> dict[str, dict[tuple[str | int, ...], np.ndarray]]:
@@ -182,9 +200,20 @@ class AdapterRoutedPolicy(_policy.Policy):
         return adapters
 
     def _resolve_adapter_name(self, task_name: str | None) -> str:
+        if self._force_base:
+            return "_base"
+
         if task_name is None:
-            return "_default" if "_default" in self._adapters else "_base"
-        return TASK_ROUTING.get(task_name, "_default" if "_default" in self._adapters else "_base")
+            return "_base"
+        requested = TASK_ROUTING.get(task_name)
+        if requested is None:
+            return "_base"
+        if requested in self._adapters:
+            return requested
+
+        fallback = "_base"
+        logger.warning("Task '%s' routed to missing adapter '%s'; falling back to %s", task_name, requested, fallback)
+        return fallback
 
     def _build_state(self, adapter_name: str) -> nnx.State:
         cached_state = self._state_cache.get(adapter_name)
@@ -203,12 +232,21 @@ class AdapterRoutedPolicy(_policy.Policy):
             return
 
         logger.info("Activating adapter: %s", adapter_name)
-        self._current_state = self._build_state(adapter_name)
+        cached_sampler = self._sampler_cache.get(adapter_name)
+        if cached_sampler is None:
+            state = self._build_state(adapter_name)
+            module = nnx.merge(self._base_graphdef, state)
+            cached_sampler = nnx_utils.module_jit(module.sample_actions)
+            self._sampler_cache[adapter_name] = cached_sampler
+        self._sample_actions = cached_sampler
         self._current_adapter_name = adapter_name
 
     def infer(self, obs: dict) -> dict:  # type: ignore[misc]
-        task_name = _normalize_task_name(jax.tree.map(lambda x: x, obs).get("task_name", None))
-        self._activate_adapter(self._resolve_adapter_name(task_name))
+        raw_task_name = jax.tree.map(lambda x: x, obs).get("task_name", None)
+        task_name = _normalize_task_name(raw_task_name)
+        adapter_name = self._resolve_adapter_name(task_name)
+        logger.info("Route decision raw_task_name=%r normalized_task_name=%r adapter=%s", raw_task_name, task_name, adapter_name)
+        self._activate_adapter(adapter_name)
 
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
@@ -217,8 +255,7 @@ class AdapterRoutedPolicy(_policy.Policy):
         start_time = time.monotonic()
         self._rng, sample_rng = jax.random.split(self._rng)
         outputs = {"state": inputs["state"]}
-        assert self._current_state is not None
-        result = self._sample_actions(self._current_state, sample_rng, _model.Observation.from_dict(inputs), **self._sample_kwargs)
+        result = self._sample_actions(sample_rng, _model.Observation.from_dict(inputs), **self._sample_kwargs)
 
         if isinstance(result, dict):
             outputs.update(result)

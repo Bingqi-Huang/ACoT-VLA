@@ -1334,20 +1334,34 @@ _REASONING2ACTION_PROMPT_MAP = {
         0.5,
     ),
 }
-_REASONING2ACTION_SPECIALIST_SPECS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
-    ("acot_specialist_pour_workpiece", ("pour_workpiece",), ("Unload workpiece_icra_SIM",)),
-    ("acot_specialist_open_door", ("open_door",), ("Turn the doorknob",)),
-    ("acot_specialist_scoop_popcorn", ("scoop_popcorn",), ("Make popcorn",)),
-    ("acot_specialist_hold_pot", ("hold_pot",), ("Carry the pot",)),
-    ("acot_specialist_place_block", ("place_block_into_box",), ("Insert building block holes_2_SIM",)),
-    ("acot_specialist_take_wrong_item", ("take_wrong_item_shelf",), ("Remove misplaced beverages from shelves",)),
+# Specialist specs: (config_name, dataset_names, prompt_keys, num_train_steps)
+# Steps are calibrated to ~1-2 epochs at batch_size=120.
+# Dataset frame counts (measured):
+#   clean_desktop: part_1=308k, part_2=254k, addition=568k → 1.13M total → 1 epoch ≈ 9.4k steps → 8000
+#   stock_shelf:   shelf=104k, shelf_part_2=95k           →  200k total → 1 epoch ≈ 1.7k steps → 3000 (1.8 ep)
+#   place_block:   place_block=188k                        →  188k total → 1 epoch ≈ 1.6k steps → 3000 (1.9 ep)
+#   others:        not yet measured, defaulting to 5000
+_REASONING2ACTION_SPECIALIST_SPECS: tuple[tuple[str, tuple[str, ...], tuple[str, ...], int], ...] = (
+    ("acot_specialist_pour_workpiece", ("pour_workpiece",), ("Unload workpiece_icra_SIM",), 5000),
+    ("acot_specialist_open_door", ("open_door",), ("Turn the doorknob",), 5000),
+    ("acot_specialist_scoop_popcorn", ("scoop_popcorn",), ("Make popcorn",), 5000),
+    ("acot_specialist_hold_pot", ("hold_pot",), ("Carry the pot",), 5000),
+    ("acot_specialist_place_block", ("place_block_into_box",), ("Insert building block holes_2_SIM",), 3000),
+    ("acot_specialist_take_wrong_item", ("take_wrong_item_shelf",), ("Remove misplaced beverages from shelves",), 5000),
     (
         "acot_specialist_stock_shelf",
-        ("stock_and_straighten_shelf","stock_and_straighten_shelf_part_2"),
+        ("stock_and_straighten_shelf", "stock_and_straighten_shelf_part_2"),
         ("Stock supermarket shelves  \nStraighten products  \nAttend ICRA conference  \nOperate SIM card",),
+        3000,
     ),
-    ("acot_specialist_sorting", ("sorting_packages_part_1", "sorting_packages_part_2", "sorting_packages_part_3"), ("Sort packages",)),
-    ("acot_specialist_clean_desktop", ("clean_the_desktop_part_1", "clean_the_desktop_part_2"), ("Clear the desktop",)),
+    ("acot_specialist_sorting", ("sorting_packages_part_1", "sorting_packages_part_2", "sorting_packages_part_3"), ("Sort packages",), 5000),
+    # clean_the_desktop_addition (211 ep, 568k frames) included alongside part_1 and part_2.
+    (
+        "acot_specialist_clean_desktop",
+        ("clean_the_desktop_part_1", "clean_the_desktop_part_2", "clean_the_desktop_addition"),
+        ("Clear the desktop",),
+        8000,
+    ),
 )
 
 
@@ -1470,7 +1484,7 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
     use_baseline_init = "ACOT_CHALLENGE_GENERALIST_WEIGHTS" not in os.environ
 
     specialist_configs = []
-    for config_name, dataset_names, prompt_keys in _REASONING2ACTION_SPECIALIST_SPECS:
+    for config_name, dataset_names, prompt_keys, num_train_steps in _REASONING2ACTION_SPECIALIST_SPECS:
         specialist_configs.append(
             TrainConfig(
                 name=config_name,
@@ -1484,7 +1498,7 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
                 lr_schedule=_optimizer.CosineDecaySchedule(
                     warmup_steps=200,
                     peak_lr=1e-5,
-                    decay_steps=5_000,
+                    decay_steps=num_train_steps,
                     decay_lr=1e-6,
                 ),
                 optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
@@ -1494,11 +1508,13 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
                     if use_baseline_init
                     else weight_loaders.CheckpointWeightLoader(generalist_weights)
                 ),
-                num_train_steps=5_000,
+                num_train_steps=num_train_steps,
                 save_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
-                num_workers=16 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
-                batch_size=18 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
-                grad_accum_steps=4 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+                val_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
+                val_num_batches=32 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
+                num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+                batch_size=120 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
+                grad_accum_steps=1,
                 freeze_filter=_reasoning2action_lora_freeze_filter(),
             )
         )

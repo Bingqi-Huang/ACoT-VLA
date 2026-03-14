@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:agibot-world.com)",
+      "Bash(ls:*)",
+      "Bash(uv run:*)"
+    ]
+  }
+}

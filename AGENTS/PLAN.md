@@ -551,40 +551,41 @@ These are the exact trainable params when using the LoRA-everywhere freeze confi
 - [ ] Inference with unknown `task_name` uses fallback adapter
 - [ ] Docker image builds and starts server automatically
 
-## 12. Milestones
+## 12. Milestones (Updated 2026-03-14)
 
-### M0: Infrastructure Ready
+### M0: Infrastructure Ready ✅
 - Bug fixes merged
 - Gradient accumulation working
-- Generalist config parses and runs for 200 debug steps
-- **Target:** 2 days
+- Generalist config parses and runs
+- Fast training path implemented and cache built
 
-### M1: Generalist Trained
-- Generalist trains to convergence on all current Reasoning2Action training datasets
-- Loss stabilizes
-- First baseline score from submission
-- **Target:** 5-7 days after M0 (depends on GPU time)
+### M1: Generalist LoRA-Everywhere Trained ✅ (failed to beat baseline)
+- Trained to 20k steps with `acot_challenge_generalist_lora_generalist`
+- Result: 5.08 vs baseline 6.35 — catastrophic forgetting
+- Diagnosis: aggressive LR, long schedule, 20 randomly-initialized expert LoRA tensors
 
-### M2: Specialists Trained + Adapters Extracted
-- All planned specialists trained from generalist checkpoint
-- All adapter `.npz` files extracted
-- **Target:** 3-5 days after M1
+### M1.5: Conservative LoRA Generalist (CURRENT — Track A)
+- Config: `acot_challenge_lora_conservative`
+- Schedule: warmup=200, lr=1e-5, 8k steps, save/val every 500
+- **Hard gate**: must beat 6.35 or discard
+- Launch: `bash scripts/train_fast.sh acot_challenge_lora_conservative exp_conservative --r2a-cache-root=<path>`
 
-### M3: Routed Serving Works
-- Adapter-routed policy loads and serves correctly
-- Local smoke test passes
-- **Target:** 2 days after M2
+### M1.6: Baseline-Compatible Generalist (Track B)
+- Config: `acot_challenge_generalist_baseline_compatible` (warmup bug fixed)
+- 0 missing tensors, but 1.3B trainable params — watch VRAM
+- Run after Track A results are known
 
-### M4: Competition Submission
-- Docker image built with all adapters
-- Submitted to competition server
-- Score received and compared to generalist-only baseline
-- **Target:** 1 day after M3
+### M2: Specialist Routing (Track C)
+- Train 3 specialists from best generalist on weak tasks only
+- Extract LoRA-only adapters with `--lora-only`
+- Extract `_default.npz` from best generalist for non-routed tasks
+- Test routed serving on competition server
+- Only pursue if generalist leaves specific tasks below baseline
 
-### M5: Iterate (if time permits)
-- Identify worst-performing tasks from submission scores
-- Re-train specialists with more steps, different LR, or unfrozen experts
-- Re-submit
+### M3: Final Submission
+- Compare: best generalist vs routed policy vs baseline
+- Submit whichever scores highest
+- **Never submit below 6.35**
 
 ## 13. File Change Index
 

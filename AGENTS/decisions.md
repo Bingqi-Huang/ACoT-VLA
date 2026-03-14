@@ -117,6 +117,79 @@ Consequence:
 - Specialist configs should use all shards of their task family, not a subset chosen only by folder naming.
 - Routing remains keyed by the single public task name, not by shard name.
 
+Date: 2026-03-14
+
+Decision:
+
+- Adopt a baseline-first competition strategy: never submit a model scoring below the official baseline (6.35).
+
+Why:
+
+- The previous LoRA-everywhere generalist regressed to 5.08 (-1.27 vs baseline), showing that training can easily make things worse.
+- The baseline already scores near-perfect on 4 of 10 tasks (open_door, scoop_popcorn, hold_pot, take_wrong_item).
+- Improvement ceiling is in the 3 weak tasks (clean_desktop, stock_shelf, place_block), worth at most +1.95 points.
+- Optimizing for benchmark score rather than train loss is critical since they are not well correlated.
+
+Consequence:
+
+- Every checkpoint must be evaluated against 6.35 before being considered for submission.
+- Training schedules should be conservative (low LR, short runs, dense checkpoints) to limit catastrophic forgetting.
+- The baseline checkpoint must never be overwritten.
+
+Date: 2026-03-14
+
+Decision:
+
+- Use conservative LoRA generalist as the primary training path, not the baseline-compatible config.
+
+Why:
+
+- LoRA constrains trainable surface to ~110M params (vs ~1.3B for baseline-compatible), limiting how far the model can drift.
+- 3x40G A100s can comfortably handle LoRA training without EMA; baseline-compatible with EMA risks OOM.
+- The 20 missing expert LoRA tensors initialize with ~0.001 magnitude noise, which is small enough that a conservative LR (1e-5) should not amplify it destructively.
+- The baseline-compatible config's warmup bug (warmup==total_steps) would have prevented any meaningful training anyway.
+
+Consequence:
+
+- `acot_challenge_lora_conservative` is the first config to launch.
+- `acot_challenge_generalist_baseline_compatible` is the second attempt if LoRA underperforms.
+- Both tracks should be evaluated by benchmark score, not train loss.
+
+Date: 2026-03-14
+
+Decision:
+
+- Route only weak tasks to specialist adapters; let strong tasks use the base model directly.
+
+Why:
+
+- The previous routing table mapped all 10 tasks to task-specific adapters. This is unnecessary and risky for tasks already at 1.0.
+- Routing only weak tasks (clean_desktop, stock_shelf, place_block) minimizes the blast radius of specialist errors.
+- A `_default.npz` adapter extracted from the best generalist preserves generalist behavior for non-routed tasks.
+
+Consequence:
+
+- `TASK_ROUTING` now contains only 4 entries (including grab_toy alias).
+- Non-routed tasks fall through to `_default` or `_base`.
+- The `_default.npz` adapter must be extracted from the best generalist checkpoint when using routing.
+
+Date: 2026-03-14
+
+Decision:
+
+- Support LoRA-only adapter extraction for lightweight routing on the 24GB inference server.
+
+Why:
+
+- Full adapter extraction (15 patterns including dense modules) produces ~140MB adapters — too heavy for 9 adapters in 24GB VRAM alongside Isaac Sim.
+- LoRA-only extraction produces ~220MB per adapter in bfloat16; 3 specialist adapters = ~660MB total.
+- This leaves sufficient headroom for base model (~7.8GB) + JIT cache (~2-4GB) + Isaac Sim.
+
+Consequence:
+
+- `scripts/extract_adapter.py` now supports `--lora-only` flag.
+- Specialist routing is viable on the competition server only with LoRA-only adapters, not full adapters.
+
 Date: 2026-03-11
 
 Decision:

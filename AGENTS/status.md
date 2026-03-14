@@ -216,6 +216,63 @@ Last updated: 2026-03-12
   - cached fast-path subtask indices now reject obvious stale-cache cases when the recorded dataset size no longer matches the active dataset
   - targeted regression coverage now exists in `src/openpi/training/data_loader_fast_test.py`
 
+## Session 2026-03-14: Competition Strategy Overhaul
+
+Author: Claude Opus 4.6
+
+### Analysis Completed
+
+- Reviewed evaluation results: baseline=6.35, previous generalist (LoRA-everywhere step 20000)=5.08, net regression of -1.27.
+- Categorized all 10 tasks by improvement potential:
+  - PROTECT (near-perfect): open_door=1.0, scoop_popcorn=1.0, hold_pot=1.0, take_wrong_item=0.97 (3.97 pts)
+  - IMPROVE (weak): clean_desktop=0.39, stock_shelf=0.24, place_block=0.42 (1.05 pts, ceiling 3.0)
+  - MAINTAIN: pour_workpiece=0.61, sorting_packages=0.67
+  - DEPRIORITIZE: sorting_continuous=0.05
+- Traced the random-init issue end-to-end through code:
+  - Both `lora_a` and `lora_b` use `nn.initializers.normal(stddev=0.01)` (not zero-init for `lora_b` like standard LoRA)
+  - `ACOTCheckpointWeightLoader` uses `missing_regex=".*"` so all missing params are synthesized
+  - Missing LoRA tensors get `random * 0.02` from weight loader, not the model's own init
+  - Net perturbation per LoRA residual ~0.001 magnitude — small but nonzero
+  - Baseline-compatible config has 0 missing tensors; LoRA config has 20 missing expert LoRA tensors
+- Identified warmup bug in `acot_challenge_generalist_baseline_compatible`: warmup=10000 == total steps, LR never reaches peak
+
+### Code Changes Made
+
+1. **New config `acot_challenge_lora_conservative`** (`src/openpi/training/config.py`)
+   - warmup=200, peak_lr=1e-5, 8000 steps, save/val every 500, batch_size=120, no EMA
+   - Conservative schedule designed to limit drift from baseline while allowing weak-task improvement
+
+2. **Fixed baseline-compatible warmup bug** (`src/openpi/training/config.py:2381`)
+   - Changed warmup from 10,000 to 500 (was equal to total run length)
+
+3. **LoRA-only adapter extraction** (`scripts/extract_adapter.py`)
+   - Added `--lora-only` flag: extracts only LoRA tensors (~220MB per adapter in bfloat16)
+   - Makes adapter routing viable on 24GB inference server
+
+4. **Specialist configs support baseline init** (`src/openpi/training/config.py`)
+   - `_make_reasoning2action_specialist_configs()` now falls back to `ACOT_CHALLENGE_INIT_WEIGHTS` when `ACOT_CHALLENGE_GENERALIST_WEIGHTS` is unset
+   - Uses `ACOTCheckpointWeightLoader` for proper dual-expert weight remapping from baseline
+   - Updated specialist hyperparams: lr=1e-5, 5000 steps, save_interval=500, no EMA
+
+5. **Task routing updated for weak-task-only specialists** (`src/openpi/policies/adapter_routed_policy.py`)
+   - `TASK_ROUTING` now only routes clean_desktop, stock_shelf, place_block to specialists
+   - All other tasks fall through to `_default` (baseline/generalist), minimizing regression risk
+
+### Strategy Established
+
+Two-track approach with baseline as hard fallback:
+
+- **Track A**: Conservative LoRA generalist — low LR, short run, dense checkpoints. Primary path.
+- **Track B**: Baseline-compatible generalist — 0 random init, but 1.3B trainable params. Higher risk.
+- **Track C** (later): Lightweight LoRA-only specialist routing for weak tasks only, using best generalist as base.
+- **Hard rule**: Never submit below 6.35. Baseline is always the fallback.
+
+### Verification
+
+- All new/modified configs load correctly via `get_config()` (verified with `JAX_PLATFORMS=cpu`)
+- `extract_adapter.py` `--lora-only` flag wired up correctly (verified via inspection)
+- Unit tests could not run in this environment (JAX aborts without GPU), but are expected to pass on training machine
+
 ## Known Open Work
 
 - Continue the retained `acot_challenge_generalist_lora_generalist` line to at least the next saved checkpoint boundary and keep the best-val step as a real checkpoint, not only in `train_metrics.jsonl`.
@@ -252,6 +309,67 @@ Last updated: 2026-03-12
   - a better online dataloader with episode locality / decoder reuse
   - or continued optimization of the new generic frame-cache path
 - Keep all frame-cache work additive and preserve legacy checkpoint / inference compatibility.
+
+## Session 2026-03-14: Specialist Adapter Training + Routing Setup
+
+Author: Claude Sonnet 4.6
+
+### Code Changes Made
+
+1. **New script `scripts/create_zero_lora_adapter.py`**
+   - Creates a `_default.npz` adapter file with all LoRA tensors set to zero
+   - Loads baseline checkpoint with `ACOTCheckpointWeightLoader(missing_init="zeros")`
+   - Uses `jax.eval_shape` to avoid allocating full model on GPU (shape-only pass)
+   - Filters to LoRA-only keys, saves in identical format to `extract_adapter.py`
+   - Sanity-checks that all LoRA values are actually zero before writing
+   - This zero adapter ensures strong tasks route to `_default` and behave exactly as baseline
+
+### Purpose
+
+Phase 1 of the specialist routing plan:
+- Weak tasks (clean_desktop, stock_shelf, place_block) → specialist LoRA adapters
+- Strong tasks → `_default.npz` (zero LoRA = pure baseline frozen weights)
+- Zero LoRA contribution: `x @ 0 @ 0 * scaling = 0`, output = frozen base weights only
+
+### Verification
+
+- `python3 -m py_compile scripts/create_zero_lora_adapter.py` passes
+
+### Next Steps
+
+Phase 1 (run immediately):
+```bash
+python scripts/create_zero_lora_adapter.py \
+  --checkpoint <baseline>/params \
+  --output adapters/_default.npz
+```
+
+Phase 2 (train 3 specialists from baseline):
+```bash
+ACOT_CHALLENGE_INIT_WEIGHTS=<baseline>/params \
+  bash scripts/train_fast.sh acot_specialist_clean_desktop exp_specialist_clean --r2a-cache-root=<path>
+
+ACOT_CHALLENGE_INIT_WEIGHTS=<baseline>/params \
+  bash scripts/train_fast.sh acot_specialist_stock_shelf exp_specialist_stock --r2a-cache-root=<path>
+
+ACOT_CHALLENGE_INIT_WEIGHTS=<baseline>/params \
+  bash scripts/train_fast.sh acot_specialist_place_block exp_specialist_place --r2a-cache-root=<path>
+```
+
+Phase 3 (extract best adapters):
+```bash
+python scripts/extract_adapter.py \
+  --checkpoint checkpoints/acot_specialist_clean_desktop/exp_specialist_clean/<step> \
+  --output adapters/acot_specialist_clean_desktop.npz --lora-only
+```
+
+Phase 4 (serve with routing):
+```bash
+python scripts/serve_policy.py policy:adapter-routed \
+  --policy.config acot_challenge_lora_conservative \
+  --policy.base-checkpoint <baseline_checkpoint> \
+  --policy.adapter-dir adapters/
+```
 
 ## Verification Notes
 

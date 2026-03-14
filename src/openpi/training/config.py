@@ -2391,11 +2391,11 @@ _CONFIGS = [
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=500,
             peak_lr=2e-5,
-            decay_steps=40_000,
+            decay_steps=10_000,
             decay_lr=4e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=0.999,
+        ema_decay=None,
         weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
             os.getenv(
                 "ACOT_CHALLENGE_INIT_WEIGHTS",

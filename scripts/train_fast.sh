@@ -11,19 +11,32 @@ shift 2
 
 TRAIN_ARGS=()
 RESUME=false
+OVERWRITE=false
 for arg in "$@"; do
-    if [[ "${arg}" == "--resume=true" ]]; then
-        RESUME=true
-    elif [[ "${arg}" == "--overwrite" ]]; then
-        continue
-    else
-        TRAIN_ARGS+=("${arg}")
-    fi
+    case "${arg}" in
+        --resume|--resume=true)
+            RESUME=true
+            ;;
+        --overwrite|--overwrite=true)
+            OVERWRITE=true
+            ;;
+        *)
+            TRAIN_ARGS+=("${arg}")
+            ;;
+    esac
 done
 
-if [[ "$RESUME" != "true" ]]; then
-    TRAIN_ARGS+=("--overwrite")
+if [[ "${RESUME}" == "true" && "${OVERWRITE}" == "true" ]]; then
+    echo "Error: --resume and --overwrite cannot be used together." >&2
+    exit 1
 fi
+
+if [[ "${RESUME}" != "true" && "${OVERWRITE}" != "true" ]]; then
+    OVERWRITE=true
+fi
+
+[[ "${RESUME}" == "true" ]] && TRAIN_ARGS+=("--resume")
+[[ "${OVERWRITE}" == "true" ]] && TRAIN_ARGS+=("--overwrite")
 
 LOG_DIR=./logs
 LOG_FILE="${LOG_DIR}/${CONFIG_NAME}_${EXP_NAME}_fast_$(date +%Y%m%d_%H%M%S).log"

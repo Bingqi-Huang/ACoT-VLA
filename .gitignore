@@ -172,3 +172,5 @@ logs/
 .vscode/
 
 *icra*
+
+adapters/

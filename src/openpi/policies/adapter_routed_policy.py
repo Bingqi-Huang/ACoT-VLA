@@ -19,18 +19,29 @@ from openpi.shared import download as _download
 from openpi.shared import nnx_utils
 from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
+from openpi.training import weight_loaders
 
 logger = logging.getLogger(__name__)
 
 PATHS_KEY = "__paths__"
 VALUE_KEY_TEMPLATE = "param_{index:04d}"
-# Route only weak tasks to specialists; strong tasks fall through to _default (baseline).
-# This minimizes risk of regression on tasks already near-perfect.
+# Route only tasks that have a prepared adapter in the current submission package.
+# Other tasks fall through to _default (or _base if _default is unavailable).
 TASK_ROUTING = {
-    "clean_the_desktop": "acot_specialist_clean_desktop",
-    "stock_and_straighten_shelf": "acot_specialist_stock_shelf",
-    "place_block_into_box": "acot_specialist_place_block",
+    "clean_the_desktop": "clean_the_desktop_1500",
 }
+
+
+def _path_to_tuple(path: str) -> tuple[str | int, ...]:
+    # Adapter paths are serialized as '/'-joined strings; convert back to tuple
+    # keys and preserve integer indices where applicable.
+    out: list[str | int] = []
+    for token in path.split("/"):
+        if token.isdigit():
+            out.append(int(token))
+        else:
+            out.append(token)
+    return tuple(out)
 
 
 def _normalize_task_name(task_name: Any) -> str | None:
@@ -76,16 +87,16 @@ def _build_policy_transforms(
     )
 
 
-def _load_adapter_file(adapter_path: pathlib.Path) -> dict[str, np.ndarray]:
+def _load_adapter_file(adapter_path: pathlib.Path) -> dict[tuple[str | int, ...], np.ndarray]:
     with np.load(adapter_path, allow_pickle=False) as adapter_data:
         if PATHS_KEY in adapter_data.files:
             paths = adapter_data[PATHS_KEY].tolist()
             return {
-                path: np.asarray(adapter_data[VALUE_KEY_TEMPLATE.format(index=index)])
+                _path_to_tuple(path): np.asarray(adapter_data[VALUE_KEY_TEMPLATE.format(index=index)])
                 for index, path in enumerate(paths)
             }
 
-        return {path: np.asarray(adapter_data[path]) for path in adapter_data.files}
+        return {_path_to_tuple(path): np.asarray(adapter_data[path]) for path in adapter_data.files}
 
 
 def create_adapter_routed_policy(
@@ -100,7 +111,20 @@ def create_adapter_routed_policy(
 ) -> "AdapterRoutedPolicy":
     checkpoint_dir = _download.maybe_download(str(checkpoint_dir))
     adapter_dir = _download.maybe_download(str(adapter_dir))
-    base_params = _model.restore_params(checkpoint_dir / "params", restore_type=np.ndarray)
+
+    # Build expected parameter tree from the configured model, then load checkpoint
+    # with zero-initialized missing tensors (especially LoRA) so a baseline checkpoint
+    # can serve as the routed base while adapters add task-specific deltas.
+    def _init_params(rng: jax.Array):
+        model = train_config.model.create(rng)
+        return nnx.state(model).to_pure_dict()
+
+    params_shape = jax.eval_shape(_init_params, jax.random.PRNGKey(0))
+    base_params = weight_loaders.ACOTCheckpointWeightLoader(
+        str(checkpoint_dir / "params"),
+        missing_init="zeros",
+    ).load(params_shape)
+
     transforms, output_transforms = _build_policy_transforms(
         train_config,
         checkpoint_dir,
@@ -136,7 +160,7 @@ class AdapterRoutedPolicy(_policy.Policy):
         self._adapter_dir = pathlib.Path(adapter_dir)
         base_model = self._model_config.load(base_params)
         _, self._base_state = nnx.split(base_model)
-        self._base_state_flat = flax.traverse_util.flatten_dict(self._base_state.to_pure_dict(), sep="/")
+        self._base_state_flat = flax.traverse_util.flatten_dict(self._base_state.to_pure_dict())
         self._adapters = self._load_adapters(self._adapter_dir)
         self._state_cache: dict[str, nnx.State] = {}
         self._current_adapter_name: str | None = None
@@ -151,7 +175,7 @@ class AdapterRoutedPolicy(_policy.Policy):
         initial_adapter = "_default" if "_default" in self._adapters else next(iter(self._adapters), "_base")
         self._activate_adapter(initial_adapter)
 
-    def _load_adapters(self, adapter_dir: pathlib.Path) -> dict[str, dict[str, np.ndarray]]:
+    def _load_adapters(self, adapter_dir: pathlib.Path) -> dict[str, dict[tuple[str | int, ...], np.ndarray]]:
         adapters = {}
         for adapter_path in sorted(adapter_dir.glob("*.npz")):
             adapters[adapter_path.stem] = _load_adapter_file(adapter_path)
@@ -170,7 +194,7 @@ class AdapterRoutedPolicy(_policy.Policy):
         merged_params = dict(self._base_state_flat)
         merged_params.update(copy.deepcopy(self._adapters.get(adapter_name, {})))
         state = copy.deepcopy(self._base_state)
-        state.replace_by_pure_dict(flax.traverse_util.unflatten_dict(merged_params, sep="/"))
+        state.replace_by_pure_dict(flax.traverse_util.unflatten_dict(merged_params))
         self._state_cache[adapter_name] = state
         return state
 

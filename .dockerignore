@@ -9,3 +9,4 @@ __pycache__
 .vscode
 wandb
 logs
+checkpoint/specialists_clean_1500

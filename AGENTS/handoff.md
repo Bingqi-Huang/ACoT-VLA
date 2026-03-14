@@ -18,6 +18,61 @@ Immediate next step:
 
 ## Current Note
 
+Date: 2026-03-14
+
+Author: GitHub Copilot
+
+What changed:
+
+- Corrected routed-serving strategy to match challenge goal: base model stays on `checkpoint/baseline/30000`, and only routed tasks apply specialist adapters.
+- `src/openpi/policies/adapter_routed_policy.py` now supports loading baseline checkpoints into LoRA config by zero-initializing missing LoRA tensors (instead of requiring a LoRA checkpoint as base).
+- Kept task routing narrow: `clean_the_desktop -> clean_the_desktop_1500`; all other tasks fall back to `_default` / base behavior.
+- Restored routed defaults in scripts/docker to baseline checkpoint:
+  - `scripts/server_submit_routed.sh`
+  - `scripts/server_routed.sh`
+  - `scripts/docker/serve_policy.Dockerfile`
+- Reverted build-context policy accordingly: `.dockerignore` excludes `checkpoint/specialists_clean_1500` again.
+- Updated `AGENTS/docker_build.md` to baseline-as-base routed runbook.
+
+What was verified:
+
+- `docker build -f scripts/docker/serve_policy.Dockerfile -t routed-clean-desktop-1500:latest .` succeeds.
+- Runtime smoke test loads checkpoint from `/submission/checkpoint/baseline/30000` and reaches websocket serving startup (`server listening on 0.0.0.0:8999`).
+
+What is still broken or unknown:
+
+- Smoke test ended with `address already in use` on port `8999`, indicating another process already bound the port during that run.
+
+Immediate next step:
+
+- Ensure port `8999` is free, rerun container, then send one routed request with `task_name=clean_the_desktop` and one non-routed task to validate adapter switching behavior end-to-end.
+
+Date: 2026-03-14
+
+Author: GitHub Copilot
+
+What changed:
+
+- Routed adapter mapping in `src/openpi/policies/adapter_routed_policy.py` now points `clean_the_desktop` to `clean_the_desktop_1500`.
+- Removed routed mappings for specialist adapters not currently packaged, so non-matched tasks cleanly use `_default`/`_base`.
+- `scripts/docker/serve_policy.Dockerfile` is now submission-ready and auto-serves routed policy from `/submission` on port `8999`.
+- `AGENTS/docker_build.md` now documents the routed clean-desktop-1500 build and smoke-test commands.
+
+What was verified:
+
+- Workspace contains required artifacts:
+  - `checkpoint/baseline/30000`
+  - `adapters/_default.npz`
+  - `adapters/clean_the_desktop_1500.npz`
+
+What is still broken or unknown:
+
+- Full end-to-end container runtime smoke test (actual server boot + websocket inference) has not been executed in this session.
+
+Immediate next step:
+
+- Build and run `scripts/docker/serve_policy.Dockerfile`, then verify service is listening on `8999` and test one routed `clean_the_desktop` request.
+
 Date: 2026-03-12
 
 Author: Codex

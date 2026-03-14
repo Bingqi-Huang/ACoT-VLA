@@ -18,7 +18,7 @@ export ACOT_ROUTED_BASE_CHECKPOINT=${ACOT_ROUTED_BASE_CHECKPOINT:-/submission/ch
 export ACOT_ROUTED_ADAPTER_DIR=${ACOT_ROUTED_ADAPTER_DIR:-/submission/adapters}
 
 cd /submission
-exec python scripts/serve_policy.py \
+exec uv run --no-sync python scripts/serve_policy.py \
   --port "${port}" \
   policy:adapter-routed \
   --policy.config "${ACOT_ROUTED_CONFIG}" \

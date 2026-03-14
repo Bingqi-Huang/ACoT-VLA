@@ -2,6 +2,35 @@
 
 Last updated: 2026-03-12
 
+## Session 2026-03-14: Routed clean-desktop-1500 serving readiness
+
+- Updated routed task mapping so `clean_the_desktop` now activates adapter `clean_the_desktop_1500`.
+- Scoped routed specialization to only currently packaged adapters; unmatched tasks now fall through to `_default` / `_base`.
+- Converted `scripts/docker/serve_policy.Dockerfile` to submission-safe packaging:
+  - isolated `/submission` layout
+  - explicit copy of serving-only trees
+  - tokenizer prefetch at build time
+  - auto-launch via `scripts/server_submit_routed.sh` on port `8999`
+- Refreshed `AGENTS/docker_build.md` to routed clean-desktop-1500 build/run/tag/push workflow.
+- Documented that `checkpoint/specialists_clean_1500` is not required at inference after adapter extraction and is excluded from Docker build context via `.dockerignore`.
+- Fixed submission Docker build failures on the `icra-admin/openpi_server` base image:
+  - base image may not provide a usable plain `python` + deps for our submission tree
+  - Dockerfile now runs `uv sync --frozen --no-dev` at build time
+  - tokenizer prefetch now uses `uv run --no-sync ...`
+  - routed startup script now uses `uv run --no-sync ...`
+  - verified `docker build --no-cache -f scripts/docker/serve_policy.Dockerfile ...` succeeds
+- Runtime smoke test found and fixed two additional issues:
+  - `matplotlib` import in `src/openpi/shared/nnx_utils.py` was unnecessary for serving and caused startup failure on the base image; removed the hard import.
+  - baseline-as-base routed serving is now explicitly supported for LoRA adapters by loading baseline params into the LoRA model with zero-initialized missing LoRA tensors in `adapter_routed_policy`.
+- Build context policy for routed submission:
+  - include `checkpoint/baseline/30000` (actual base model for non-routed tasks)
+  - exclude `checkpoint/specialists_clean_1500` via `.dockerignore` after adapter extraction
+- Fixed routed adapter state flatten/unflatten path handling for checkpoints that contain integer key path parts:
+  - `src/openpi/policies/adapter_routed_policy.py` now stores flattened paths as tuple keys internally instead of `/`-joined strings.
+- Verified runtime smoke test reaches websocket serving state with baseline base-checkpoint:
+  - checkpoint loaded from `checkpoint/baseline/30000`
+  - `server listening on 0.0.0.0:8999`
+
 ## Current State
 
 - Repository has been examined for Reasoning2Action competition training and submission flow.

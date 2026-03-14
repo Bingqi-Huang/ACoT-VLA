@@ -1,17 +1,25 @@
-cart_num=${1}
-port=${2}
+#!/usr/bin/env bash
+set -euo pipefail
 
-export TF_NUM_INTRAOP_THREADS=16
-export CUDA_VISIBLE_DEVICES=${cart_num}
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.9
-export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export XLA_PYTHON_CLIENT_ALLOCATOR=platform
-export XLA_FLAGS="--xla_gpu_autotune_level=0"
+gpu_id=${1:-0}
+port=${2:-8999}
 
-export PYTHONPATH=/root/openpi/src:${PYTHONPATH:-/app:/app/src}
-GIT_LFS_SKIP_SMUDGE=1 uv run python scripts/serve_policy.py \
-    --port ${port} \
+export TF_NUM_INTRAOP_THREADS=${TF_NUM_INTRAOP_THREADS:-16}
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-${gpu_id}}
+export XLA_PYTHON_CLIENT_MEM_FRACTION=${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.5}
+export XLA_PYTHON_CLIENT_PREALLOCATE=${XLA_PYTHON_CLIENT_PREALLOCATE:-false}
+export XLA_PYTHON_CLIENT_ALLOCATOR=${XLA_PYTHON_CLIENT_ALLOCATOR:-platform}
+export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_autotune_level=0}"
+
+export OPENPI_DATA_HOME=${OPENPI_DATA_HOME:-/root/.cache/openpi}
+export PYTHONPATH="${PYTHONPATH:-/submission:/submission/src:/submission/packages/openpi-client/src}"
+export ACOT_ROUTED_CONFIG=${ACOT_ROUTED_CONFIG:-acot_challenge_lora_conservative}
+export ACOT_ROUTED_BASE_CHECKPOINT=${ACOT_ROUTED_BASE_CHECKPOINT:-./checkpoint/baseline/30000}
+export ACOT_ROUTED_ADAPTER_DIR=${ACOT_ROUTED_ADAPTER_DIR:-./adapters}
+
+exec python scripts/serve_policy.py \
+    --port "${port}" \
     policy:adapter-routed \
-    --policy.config "${ACOT_ROUTED_CONFIG:-acot_challenge_generalist_lora_all}" \
-    --policy.base-checkpoint "${ACOT_ROUTED_BASE_CHECKPOINT:-./checkpoints/acot_challenge_generalist_lora_all/generalist_v1/50000}" \
-    --policy.adapter-dir "${ACOT_ROUTED_ADAPTER_DIR:-./adapters}"
+    --policy.config "${ACOT_ROUTED_CONFIG}" \
+    --policy.base-checkpoint "${ACOT_ROUTED_BASE_CHECKPOINT}" \
+    --policy.adapter-dir "${ACOT_ROUTED_ADAPTER_DIR}"

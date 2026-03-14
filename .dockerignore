@@ -1,3 +1,11 @@
 .venv
 checkpoints
 data
+.git
+__pycache__
+*.pyc
+.pytest_cache
+.cache
+.vscode
+wandb
+logs

@@ -30,7 +30,6 @@ TASK_ROUTING = {
     "clean_the_desktop": "acot_specialist_clean_desktop",
     "stock_and_straighten_shelf": "acot_specialist_stock_shelf",
     "place_block_into_box": "acot_specialist_place_block",
-    "grab_toy": "acot_specialist_place_block",
 }
 
 

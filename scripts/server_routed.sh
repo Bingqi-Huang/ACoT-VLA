@@ -17,7 +17,7 @@ export ACOT_ROUTED_CONFIG=${ACOT_ROUTED_CONFIG:-acot_challenge_lora_conservative
 export ACOT_ROUTED_BASE_CHECKPOINT=${ACOT_ROUTED_BASE_CHECKPOINT:-./checkpoint/baseline/30000}
 export ACOT_ROUTED_ADAPTER_DIR=${ACOT_ROUTED_ADAPTER_DIR:-./adapters}
 
-exec uv run --no-sync python scripts/serve_policy.py \
+exec uv run python scripts/serve_policy.py \
     --port "${port}" \
     policy:adapter-routed \
     --policy.config "${ACOT_ROUTED_CONFIG}" \

@@ -57,7 +57,9 @@ def main(
     loader = ACOTCheckpointWeightLoader(checkpoint, missing_init="zeros")
     loaded = loader.load(params_shape)
 
-    flat = flax.traverse_util.flatten_dict(loaded, sep="/")
+    # Use sep=None to get tuple keys (avoids int-key join error from convert_str_keys_to_int).
+    flat_tuples = flax.traverse_util.flatten_dict(loaded, sep=None)
+    flat = {"/".join(str(k) for k in path): v for path, v in flat_tuples.items()}
 
     lora_params = {k: np.asarray(v) for k, v in flat.items() if "lora" in k}
     if not lora_params:

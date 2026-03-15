@@ -33,6 +33,12 @@ TASK_ROUTING = {
 }
 
 
+def _summarize_paths(paths: list[str], *, limit: int = 8) -> str:
+    if len(paths) <= limit:
+        return ", ".join(paths)
+    return ", ".join(paths[:limit]) + f", ... (+{len(paths) - limit} more)"
+
+
 def _path_to_tuple(path: str) -> tuple[str | int, ...]:
     # Adapter paths are serialized as '/'-joined strings; convert back to tuple
     # keys and preserve integer indices where applicable.
@@ -172,7 +178,6 @@ class AdapterRoutedPolicy(_policy.Policy):
         self._adapter_dir = pathlib.Path(adapter_dir)
         base_model = self._model_config.load(base_params)
         self._base_graphdef, self._base_state = nnx.split(base_model)
-        self._base_state_flat = flax.traverse_util.flatten_dict(self._base_state.to_pure_dict())
         self._adapters = self._load_adapters(self._adapter_dir)
         self._state_cache: dict[str, nnx.State] = {}
         self._sampler_cache: dict[str, Any] = {}
@@ -220,9 +225,33 @@ class AdapterRoutedPolicy(_policy.Policy):
         if cached_state is not None:
             return cached_state
 
-        merged_params = dict(self._base_state_flat)
-        merged_params.update(copy.deepcopy(self._adapters.get(adapter_name, {})))
+        # Always flatten the concrete state instance we are about to update.
+        # This avoids stale key-set assumptions if the internal state graph differs
+        # from any cached flatten mapping.
         state = copy.deepcopy(self._base_state)
+        state_flat = flax.traverse_util.flatten_dict(state.to_pure_dict())
+        merged_params = dict(state_flat)
+        adapter_params = self._adapters.get(adapter_name, {})
+        if adapter_params:
+            known_adapter_params = {}
+            unknown_paths = []
+            for key, value in adapter_params.items():
+                if key in state_flat:
+                    known_adapter_params[key] = value
+                else:
+                    unknown_paths.append("/".join(map(str, key)))
+
+            if unknown_paths:
+                unknown_paths.sort()
+                logger.warning(
+                    "Adapter '%s' has %d parameter(s) not present in base model; ignoring them. Sample: %s",
+                    adapter_name,
+                    len(unknown_paths),
+                    _summarize_paths(unknown_paths),
+                )
+
+            merged_params.update(copy.deepcopy(known_adapter_params))
+
         state.replace_by_pure_dict(flax.traverse_util.unflatten_dict(merged_params))
         self._state_cache[adapter_name] = state
         return state

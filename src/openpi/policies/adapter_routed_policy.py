@@ -17,6 +17,7 @@ from openpi.models import model as _model
 from openpi.policies import policy as _policy
 from openpi.shared import array_typing as at
 from openpi.shared import download as _download
+from openpi.shared import normalize as _normalize
 from openpi.shared import nnx_utils
 from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
@@ -112,6 +113,13 @@ def _load_adapter_file(adapter_path: pathlib.Path) -> dict[tuple[str | int, ...]
         return {_path_to_tuple(path): _to_infer_dtype(np.asarray(adapter_data[path])) for path in adapter_data.files}
 
 
+def _load_norm_stats_override(norm_stats_path: pathlib.Path | str) -> dict[str, _transforms.NormStats]:
+    norm_stats_path = pathlib.Path(_download.maybe_download(str(norm_stats_path)))
+    if norm_stats_path.is_dir():
+        return _normalize.load(norm_stats_path)
+    return _normalize.deserialize_json(norm_stats_path.read_text())
+
+
 def create_adapter_routed_policy(
     train_config: _config.TrainConfig,
     checkpoint_dir: pathlib.Path | str,
@@ -121,6 +129,7 @@ def create_adapter_routed_policy(
     sample_kwargs: dict[str, Any] | None = None,
     default_prompt: str | None = None,
     norm_stats: dict[str, _transforms.NormStats] | None = None,
+    specialist_norm_stats_path: pathlib.Path | str | None = None,
 ) -> "AdapterRoutedPolicy":
     checkpoint_dir = _download.maybe_download(str(checkpoint_dir))
     adapter_dir = _download.maybe_download(str(adapter_dir))
@@ -150,12 +159,28 @@ def create_adapter_routed_policy(
         default_prompt=default_prompt,
         norm_stats=norm_stats,
     )
+    specialist_transforms = None
+    specialist_output_transforms = None
+    if specialist_norm_stats_path:
+        specialist_norm_stats = _load_norm_stats_override(specialist_norm_stats_path)
+        specialist_transforms, specialist_output_transforms = _build_policy_transforms(
+            train_config,
+            checkpoint_dir,
+            repack_transforms=repack_transforms,
+            default_prompt=default_prompt,
+            norm_stats=specialist_norm_stats,
+        )
+        logger.info("Loaded specialist norm stats override from %s", specialist_norm_stats_path)
+
     return AdapterRoutedPolicy(
         train_config.model,
         base_params=base_params,
         adapter_dir=adapter_dir,
         transforms=transforms,
         output_transforms=output_transforms,
+        specialist_transforms=specialist_transforms,
+        specialist_output_transforms=specialist_output_transforms,
+        specialist_norm_stats_source=(str(specialist_norm_stats_path) if specialist_norm_stats_path else None),
         sample_kwargs=sample_kwargs,
         metadata=train_config.policy_metadata,
     )
@@ -171,6 +196,9 @@ class AdapterRoutedPolicy(_policy.Policy):
         rng: at.KeyArrayLike | None = None,
         transforms: Sequence[_transforms.DataTransformFn] = (),
         output_transforms: Sequence[_transforms.DataTransformFn] = (),
+        specialist_transforms: Sequence[_transforms.DataTransformFn] | None = None,
+        specialist_output_transforms: Sequence[_transforms.DataTransformFn] | None = None,
+        specialist_norm_stats_source: str | None = None,
         sample_kwargs: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ):
@@ -183,8 +211,25 @@ class AdapterRoutedPolicy(_policy.Policy):
         self._sampler_cache: dict[str, Any] = {}
         self._current_adapter_name: str | None = None
         self._sample_actions = nnx_utils.module_jit(base_model.sample_actions)
-        self._input_transform = _transforms.compose(transforms)
-        self._output_transform = _transforms.compose(output_transforms)
+        self._base_input_transform = _transforms.compose(transforms)
+        self._base_output_transform = _transforms.compose(output_transforms)
+        self._specialist_input_transform = (
+            _transforms.compose(specialist_transforms)
+            if specialist_transforms is not None
+            else self._base_input_transform
+        )
+        self._specialist_output_transform = (
+            _transforms.compose(specialist_output_transforms)
+            if specialist_output_transforms is not None
+            else self._base_output_transform
+        )
+        self._has_specialist_norm_override = (
+            specialist_transforms is not None and specialist_output_transforms is not None
+        )
+        self._specialist_norm_stats_source = specialist_norm_stats_source
+        self._current_norm_profile = "base_checkpoint"
+        self._input_transform = self._base_input_transform
+        self._output_transform = self._base_output_transform
         self._rng = rng or jax.random.key(0)
         self._sample_kwargs = sample_kwargs or {}
         self._metadata = metadata or {}
@@ -194,6 +239,13 @@ class AdapterRoutedPolicy(_policy.Policy):
             logger.warning("ACOT_ROUTE_FORCE_BASE is enabled; all tasks will use _base.")
 
         logger.info("Loaded adapters from %s: %s", self._adapter_dir, sorted(self._adapters.keys()))
+        if self._has_specialist_norm_override:
+            logger.info(
+                "Norm routing enabled: routed adapters use specialist override from %s; _base uses checkpoint/assets norms.",
+                self._specialist_norm_stats_source,
+            )
+        else:
+            logger.info("Norm routing override is disabled; all adapters use checkpoint/assets norms.")
 
         initial_adapter = "_base"
         self._activate_adapter(initial_adapter)
@@ -268,6 +320,19 @@ class AdapterRoutedPolicy(_policy.Policy):
             cached_sampler = nnx_utils.module_jit(module.sample_actions)
             self._sampler_cache[adapter_name] = cached_sampler
         self._sample_actions = cached_sampler
+        use_specialist_norms = self._has_specialist_norm_override and not adapter_name.startswith("_")
+        if use_specialist_norms:
+            self._input_transform = self._specialist_input_transform
+            self._output_transform = self._specialist_output_transform
+            norm_profile = "specialist_override"
+            norm_source = self._specialist_norm_stats_source or "<unset>"
+        else:
+            self._input_transform = self._base_input_transform
+            self._output_transform = self._base_output_transform
+            norm_profile = "base_checkpoint"
+            norm_source = "checkpoint/assets"
+        self._current_norm_profile = norm_profile
+        logger.info("Norm profile switched: adapter=%s profile=%s source=%s", adapter_name, norm_profile, norm_source)
         self._current_adapter_name = adapter_name
 
     def infer(self, obs: dict) -> dict:  # type: ignore[misc]
@@ -297,4 +362,5 @@ class AdapterRoutedPolicy(_policy.Policy):
         outputs = self._output_transform(outputs)
         outputs["policy_timing"] = {"infer_ms": model_time * 1000}
         outputs["adapter_name"] = self._current_adapter_name
+        outputs["norm_profile"] = self._current_norm_profile
         return self.post_process(obs, outputs)

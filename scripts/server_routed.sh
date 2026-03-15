@@ -16,10 +16,17 @@ export PYTHONPATH="${PYTHONPATH:-/submission:/submission/src:/submission/package
 export ACOT_ROUTED_CONFIG=${ACOT_ROUTED_CONFIG:-acot_challenge_lora_conservative}
 export ACOT_ROUTED_BASE_CHECKPOINT=${ACOT_ROUTED_BASE_CHECKPOINT:-./checkpoint/baseline/30000}
 export ACOT_ROUTED_ADAPTER_DIR=${ACOT_ROUTED_ADAPTER_DIR:-./adapters}
+export ACOT_ROUTED_SPECIALIST_NORM_STATS_PATH=${ACOT_ROUTED_SPECIALIST_NORM_STATS_PATH:-./assets/reasoning2action_sim_generalist/norm_stats.json}
+
+extra_args=()
+if [[ -n "${ACOT_ROUTED_SPECIALIST_NORM_STATS_PATH}" ]]; then
+    extra_args+=(--policy.specialist-norm-stats-path "${ACOT_ROUTED_SPECIALIST_NORM_STATS_PATH}")
+fi
 
 exec uv run python scripts/serve_policy.py \
     --port "${port}" \
     policy:adapter-routed \
     --policy.config "${ACOT_ROUTED_CONFIG}" \
     --policy.base-checkpoint "${ACOT_ROUTED_BASE_CHECKPOINT}" \
-    --policy.adapter-dir "${ACOT_ROUTED_ADAPTER_DIR}"
+    --policy.adapter-dir "${ACOT_ROUTED_ADAPTER_DIR}" \
+    "${extra_args[@]}"

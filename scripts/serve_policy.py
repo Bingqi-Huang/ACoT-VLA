@@ -46,6 +46,7 @@ class AdapterRouted:
     config: str
     base_checkpoint: str
     adapter_dir: str
+    specialist_norm_stats_path: str | None = None
 
 
 @dataclasses.dataclass
@@ -123,6 +124,7 @@ def create_policy(args: Args) -> _policy.Policy:
                 args.policy.base_checkpoint,
                 args.policy.adapter_dir,
                 default_prompt=args.default_prompt,
+                specialist_norm_stats_path=args.policy.specialist_norm_stats_path,
             )
         case Default():
             return create_default_policy(args.env, default_prompt=args.default_prompt)

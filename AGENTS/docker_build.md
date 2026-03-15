@@ -1,112 +1,108 @@
-# Steps for building and testing routed submit-ready image
+# Docker Build/Run Guide (Routed clean5000)
 
-## Why this setup
+This document aligns our workflow with the official ICRA Reasoning2Action submission contract.
 
-Goal for challenge routing:
+## Official Contract Mapping
 
-- Keep baseline capability for non-target tasks.
-- Use task-specific adapter only when the route key matches.
+Official requires:
 
-This image now follows that contract:
+- Inference service auto-starts from Docker `CMD` or `ENTRYPOINT`.
+- Service listens on port `8999`.
+- Image contains dependencies, code, checkpoints, and serving logic.
+- Submission model type matches policy output (`abs_joint` or `abs_pose`).
 
-- base checkpoint: baseline (`checkpoint/baseline/30000`)
-- default adapter: `_default.npz` (empty / zero-LoRA behavior)
-- task adapter: `clean_the_desktop_1500.npz`
+Current repo status:
 
-Implementation note:
-LoRA config params missing from the baseline checkpoint are zero-initialized
-at load time, so `_default` path preserves baseline behavior.
+- Auto-start: yes (`scripts/server_submit_routed.sh` via Docker `CMD`).
+- Port: yes (default `8999`).
+- Artifacts in image: yes (`checkpoint/` + `adapters/` + code tree).
+- Output type: `abs_joint` (submit page should select `abs_joint`).
 
-Current stable defaults:
+## Runtime Design
+
+Routed strategy for this image:
 
 - Base checkpoint: `checkpoint/baseline/30000`
 - Routed adapter dir: `adapters/`
-- Clean-desktop specialist adapter: `adapters/clean_the_desktop_1500.npz`
-- Fallback adapter: `adapters/_default.npz` (can be empty)
-- Routing launch script: `scripts/server_submit_routed.sh`
-- Dockerfile: `scripts/docker/serve_policy.Dockerfile`
+- Specialist adapter: `adapters/clean_the_desktop_5000.npz`
+- Fallback adapter: `adapters/_default.npz`
 
-## 1) Stage checkpoint and adapters
+`adapter_routed_policy` loads missing LoRA tensors from baseline with zero init,
+so non-routed tasks preserve baseline behavior.
 
-Copy trained specialist checkpoint from training machine:
+## 1) Required Local Files
 
-```bash
-rsync -avP -e "ssh -p 2222" /data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_clean_desktop/exp_specialist_clean/1500/params bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-clean-1500/checkpoint/specialists_clean_1500/
-rsync -avP -e "ssh -p 2222" /data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_clean_desktop/exp_specialist_clean/1500/assets bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-clean-1500/checkpoint/specialists_clean_1500/
-rsync -avP -e "ssh -p 2222" /data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_clean_desktop/exp_specialist_clean/1500/_CHECKPOINT_METADATA bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-clean-1500/checkpoint/specialists_clean_1500/
-```
-
-Extract adapter (if not yet extracted):
-
-```bash
-uv run ./scripts/extract_adapter.py \
-    --checkpoint ./checkpoint/specialists_clean_1500/ \
-    --output ./adapters/clean_the_desktop_1500
-```
-
-Required paths:
+Verify these paths exist before build:
 
 ```bash
 ls checkpoint/baseline/30000/params
 ls checkpoint/baseline/30000/assets
 ls adapters/_default.npz
-ls adapters/clean_the_desktop_1500.npz
+ls adapters/clean_the_desktop_5000.npz
 ```
 
-After adapter extraction, `checkpoint/specialists_clean_1500` is not required for this routed image.
-You can remove it to reduce build context and local disk usage:
+If adapter has not been extracted yet:
 
 ```bash
-rm -rf checkpoint/specialists_clean_1500
+uv run ./scripts/extract_adapter.py \
+    --checkpoint ./checkpoint/specialists_clean_5000/ \
+    --output ./adapters/clean_the_desktop_5000
 ```
 
-## 1.5) Build-context guard
+## 1.1) Personal rsync Staging Commands (Keep)
 
-This repo excludes the specialist full checkpoint from build context:
-
-- `.dockerignore` includes: `checkpoint/specialists_clean_1500`
-
-Quick check:
+These are preserved for manual checkpoint sync from your training machine:
 
 ```bash
-grep -n "checkpoint/specialists_clean_1500" .dockerignore
+rsync -avP -e "ssh -p 2222" /data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_clean_desktop/exp_specialist_clean/5000/params bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-clean-5000/checkpoint/specialists_clean_5000/
+rsync -avP -e "ssh -p 2222" /data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_clean_desktop/exp_specialist_clean/5000/assets bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-clean-5000/checkpoint/specialists_clean_5000/
+rsync -avP -e "ssh -p 2222" /data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_clean_desktop/exp_specialist_clean/5000/_CHECKPOINT_METADATA bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-clean-5000/checkpoint/specialists_clean_5000/
 ```
 
-## 2) Build image
+After extraction, the full specialist checkpoint is not required in the image build context:
+
+```bash
+rm -rf checkpoint/specialists_clean_5000
+```
+
+## 2) Build Context Guard
+
+Ensure `.dockerignore` excludes temporary heavy checkpoints:
+
+```bash
+grep -n "checkpoint/specialists_clean_5000" .dockerignore
+```
+
+## 3) Build Submission Image
+
+Preferred Dockerfile for routed submission:
+
+- `scripts/docker/serve_policy.Dockerfile`
+
+Build command:
 
 ```bash
 docker build --no-cache \
     -f scripts/docker/serve_policy.Dockerfile \
-    -t routed-clean-desktop-1500:latest \
+    -t routed-clean-desktop-5000:latest \
     .
 ```
 
-## 3) Run local serve smoke test
+## 4) Run Inference Service (Official-Compatible)
+
+Use the same run style as official docs (no extra custom env args):
 
 ```bash
 docker run -it --rm --network=host --gpus all \
     -e XLA_PYTHON_CLIENT_MEM_FRACTION=0.3 \
-    routed-clean-desktop-1500:latest
+    routed-clean-desktop-5000:latest
 ```
 
-Expected behavior:
+Success signal in logs:
 
-- container auto-starts server from `CMD`
-- websocket policy server listens on `8999`
-- no runtime dependency sync/install (`uv run --no-sync` is expected)
-- no runtime checkpoint download
+- `INFO:websockets.server:server listening on 0.0.0.0:8999`
 
-## 4) Optional explicit env override test
-
-```bash
-docker run -it --rm --network=host --gpus all \
-    -e ACOT_ROUTED_CONFIG=acot_challenge_lora_conservative \
-    -e ACOT_ROUTED_BASE_CHECKPOINT=/submission/checkpoint/baseline/30000 \
-    -e ACOT_ROUTED_ADAPTER_DIR=/submission/adapters \
-    routed-clean-desktop-1500:latest
-```
-
-## 5) Offline ICRA benchmark
+## 5) Run ICRA Tasks In Genie Sim
 
 ```bash
 cd /mnt/SharedData/Research/genie_sim
@@ -115,10 +111,33 @@ cd /mnt/SharedData/Research/genie_sim
 ./scripts/run_icra_tasks.sh
 ```
 
-## 6) Tag and push
+If inference runs on another host:
 
 ```bash
-docker tag routed-clean-desktop-1500:latest \
-    sim-icra-registry.cn-beijing.cr.aliyuncs.com/onecable/routed-clean-desktop-1500:latest
-docker push sim-icra-registry.cn-beijing.cr.aliyuncs.com/onecable/routed-clean-desktop-1500:latest
+./scripts/run_icra_tasks.sh --infer-host <host_ip>:8999
 ```
+
+Optional score aggregation:
+
+```bash
+python3 scripts/stat_average.py
+```
+
+## 6) Tag and Push
+
+```bash
+docker login sim-icra-registry.cn-beijing.cr.aliyuncs.com
+docker tag routed-clean-desktop-5000:latest \
+    sim-icra-registry.cn-beijing.cr.aliyuncs.com/<namespace>/routed-clean-desktop-5000:latest
+docker push sim-icra-registry.cn-beijing.cr.aliyuncs.com/<namespace>/routed-clean-desktop-5000:latest
+```
+
+Submit the full image URL on the platform and select model type `abs_joint`.
+
+## 7) Final Checklist
+
+- Container starts serving automatically without extra manual command inside container.
+- Service listens on `8999`.
+- `checkpoint/baseline/30000` is present in image.
+- `adapters/_default.npz` and `adapters/clean_the_desktop_5000.npz` are present in image.
+- No runtime remote dependency install/download is required for serving.

@@ -31,11 +31,11 @@ packaging rules below still apply.
   - `COPY . /app` mixes the submission tree with base-image files and makes the
     runtime ambiguous.
   - Use an isolated directory such as `/submission` instead.
-- Do not use `uv run` in the container start command.
-  - In practice this triggered runtime package sync/build work inside the
-    container.
-  - Start the server with plain `python` and an explicit `PYTHONPATH` that
-    points at the submission tree.
+- Avoid startup commands that can trigger runtime dependency sync/build work.
+  - If using `uv run`, it must be `uv run --no-sync` and dependencies must be
+    installed at build time (for example with `uv sync --frozen --no-dev`).
+  - Plain `python` startup is also valid when the runtime environment is already
+    complete.
 - Do not leave tokenizer download to first boot.
   - Pre-fetch tokenizer assets during `docker build`.
 - Do not ship training-only checkpoint state.
@@ -336,7 +336,9 @@ Paste the full image URL into the submission page and choose model type
 - Checkpoint lives under `checkpoint/`, not `checkpoints/`
 - `train_state/` removed from the shipped checkpoint
 - Dockerfile uses `/submission`, not `/app`
-- Launcher uses `python`, not `uv run`
+- Launcher startup mode is runtime-stable:
+  - either plain `python`
+  - or `uv run --no-sync` with build-time `uv sync --frozen --no-dev`
 - Tokenizer is fetched during build
 - Image starts automatically via `CMD`
 - Service listens on port `8999`

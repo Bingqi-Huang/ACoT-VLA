@@ -2,6 +2,17 @@
 
 Last updated: 2026-03-12
 
+## Session 2026-03-15: Official submission contract alignment
+
+- Reconciled submission docs with official ICRA Reasoning2Action requirements
+  (auto-start, websocket on port 8999, image self-contained, model-type selection).
+- Rewrote `AGENTS/docker_build.md` as an official-contract-mapped routed clean5000
+  build/run/push guide.
+- Fixed a docs inconsistency in `AGENTS/runbook_submission.md`:
+  - replaced the hard prohibition on `uv run` with the accurate rule:
+    `uv run --no-sync` is acceptable only when dependencies are installed at build time.
+- Clarified that the routed clean5000 path should submit model type `abs_joint`.
+
 ## Session 2026-03-14: Routed clean-desktop-1500 serving readiness
 
 - Updated routed task mapping so `clean_the_desktop` now activates adapter `clean_the_desktop_1500`.

@@ -1,6 +1,17 @@
 # Status
 
-Last updated: 2026-03-12
+Last updated: 2026-03-15
+
+## Session 2026-03-15: Routed adapter state-merge hotfix for Docker runtime
+
+- Fixed a routed-serving crash in `src/openpi/policies/adapter_routed_policy.py` when activating
+  `clean_the_desktop_5000`:
+  - `_build_state()` now flattens the concrete copied `nnx.State` per activation and
+    intersects adapter keys against that live key-set before merge.
+  - removed reliance on a cached `_base_state_flat` mapping that could diverge from the
+    concrete replace target and allow invalid keys into `replace_by_pure_dict(...)`.
+- Kept existing unknown-adapter-key warning behavior and sample-path logging.
+- Local sanity check confirms LoRA adapter keys merge cleanly into the state tree without key errors.
 
 ## Session 2026-03-15: Official submission contract alignment
 

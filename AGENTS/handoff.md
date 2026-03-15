@@ -18,6 +18,34 @@ Immediate next step:
 
 ## Current Note
 
+Date: 2026-03-15
+
+Author: Codex
+
+What changed:
+
+- Fixed a routed-serving runtime bug in `src/openpi/policies/adapter_routed_policy.py`
+  triggered by adapter activation (`clean_the_desktop_5000`) inside Docker.
+- `_build_state()` now computes `state_flat` from the concrete copied base `nnx.State`
+  and only applies adapter tensors whose keys exist in that live state.
+- Removed use of cached `_base_state_flat` for key validation/merge.
+
+What was verified:
+
+- `python -m py_compile src/openpi/policies/adapter_routed_policy.py` passes.
+- A local sanity script using `adapters/clean_the_desktop_5000.npz` confirms state
+  replacement succeeds with all matched adapter tensors (`sanity_replace_ok 158`).
+
+What is still broken or unknown:
+
+- Full end-to-end Docker websocket inference (real request through `serve_policy.py`)
+  was not re-run in this session.
+
+Immediate next step:
+
+- Rebuild/run the submission image and send a `task_name=clean_the_desktop` request to
+  confirm the previous `replace_by_pure_dict` key-mismatch exception is gone.
+
 Date: 2026-03-14
 
 Author: GitHub Copilot

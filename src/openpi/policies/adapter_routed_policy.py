@@ -1,5 +1,4 @@
 from collections.abc import Sequence
-import copy
 import logging
 import os
 import pathlib
@@ -278,11 +277,10 @@ class AdapterRoutedPolicy(_policy.Policy):
         if cached_state is not None:
             return cached_state
 
-        # Always flatten the concrete state instance we are about to update.
-        # This avoids stale key-set assumptions if the internal state graph differs
-        # from any cached flatten mapping.
-        state = copy.deepcopy(self._base_state)
-        state_flat = flax.traverse_util.flatten_dict(state.to_pure_dict())
+        # Flatten the base state without deep-copying.  JAX arrays are immutable,
+        # so sharing references between base and adapter states is safe and avoids
+        # the GPU OOM caused by deep-copying the full model state (~7.8 GB).
+        state_flat = flax.traverse_util.flatten_dict(self._base_state.to_pure_dict())
         merged_params = dict(state_flat)
         adapter_params = self._adapters.get(adapter_name, {})
         if adapter_params:
@@ -303,9 +301,15 @@ class AdapterRoutedPolicy(_policy.Policy):
                     _summarize_paths(unknown_paths),
                 )
 
-            merged_params.update(copy.deepcopy(known_adapter_params))
+            merged_params.update(known_adapter_params)
 
-        state.replace_by_pure_dict(flax.traverse_util.unflatten_dict(merged_params))
+        # Reconstruct a valid nnx.State from the merged params using
+        # model_config.load, which internally uses nnx.eval_shape (no GPU
+        # allocation for model structure) then injects our merged params.
+        merged_pure_dict = flax.traverse_util.unflatten_dict(merged_params)
+        model = self._model_config.load(merged_pure_dict)
+        _, state = nnx.split(model)
+        del model
         self._state_cache[adapter_name] = state
         return state
 

@@ -1,0 +1,280 @@
+{
+  "runs": [
+    {
+      "run": "run-20260311_122703-cs5i3sx9",
+      "mode": "online",
+      "startedAt": "2026-03-11T04:27:03.385527Z",
+      "program": "/mnt/SharedData/Research/ACoT-VLA/scripts/train_fast.py",
+      "args": "acot_challenge_generalist_lora_generalist --exp_name generalist_v1_bs96_fast_debug --overwrite",
+      "commit": "df740bb31f0635c7e0e12593b523f81c34a515e6",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "gpu_count": 2,
+      "has_config": true,
+      "has_summary": true
+    },
+    {
+      "run": "run-20260311_123642-0bjait8z",
+      "mode": "online",
+      "startedAt": "2026-03-11T04:36:42.169368Z",
+      "program": "/mnt/SharedData/Research/ACoT-VLA/scripts/train_fast.py",
+      "args": "acot_challenge_generalist_lora_generalist --exp_name generalist_v1_bs96_fast_debug --overwrite",
+      "commit": "4d0adc8b1f87d1c797baad520bf51d02921b7b1e",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "gpu_count": 2,
+      "has_config": false,
+      "has_summary": false
+    },
+    {
+      "run": "run-20260311_135138-pk1zvimy",
+      "mode": "online",
+      "startedAt": "2026-03-11T05:51:38.279624Z",
+      "program": "/mnt/SharedData/Research/ACoT-VLA/scripts/train.py",
+      "args": "acot_challenge_generalist_lora_generalist --exp_name generalist_v1_bs64_debug --overwrite",
+      "commit": "a3983b499a0f21520daafc8ea5e8ef4bc9401755",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "gpu_count": 2,
+      "has_config": false,
+      "has_summary": false
+    },
+    {
+      "run": "run-20260312_215641-0zas6bzj",
+      "mode": "online",
+      "startedAt": "2026-03-12T13:56:41.167265Z",
+      "program": "/mnt/SharedData/Research/ACoT-VLA/scripts/train_fast.py",
+      "args": "acot_challenge_generalist_lora_generalist_tuned --exp_name generalists_fast_v1_bs64 --overwrite",
+      "commit": "9fadcec27aa3fad8ae5dd645789fcc134348cc09",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "gpu_count": 2,
+      "has_config": false,
+      "has_summary": false
+    },
+    {
+      "run": "run-20260312_220012-vp83y2xf",
+      "mode": "online",
+      "startedAt": "2026-03-12T14:00:12.900353Z",
+      "program": "/mnt/SharedData/Research/ACoT-VLA/scripts/train_fast.py",
+      "args": "acot_challenge_generalist_lora_generalist_tuned --exp_name generalists_fast_v1_bs64 --overwrite",
+      "commit": "9fadcec27aa3fad8ae5dd645789fcc134348cc09",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "gpu_count": 2,
+      "has_config": true,
+      "has_summary": true
+    },
+    {
+      "run": "run-20260312_223905-kk5sklcs",
+      "mode": "online",
+      "startedAt": "2026-03-12T14:39:05.481234Z",
+      "program": "/mnt/SharedData/Research/ACoT-VLA/scripts/train_fast.py",
+      "args": "acot_challenge_generalist_lora_generalist_tuned --exp_name generalists_fast_v1_bs64 --overwrite",
+      "commit": "4868e24576ae723fa0fa0d5490e464738112f55f",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "gpu_count": 2,
+      "has_config": false,
+      "has_summary": false
+    },
+    {
+      "run": "run-20260313_084029-kk5sklcs",
+      "mode": "online",
+      "startedAt": "2026-03-12T20:16:28.453148Z",
+      "program": "/mnt/SharedData/Research/ACoT-VLA/scripts/train_fast.py",
+      "args": "acot_challenge_generalist_lora_generalist_tuned --exp_name generalists_fast_v1_bs64 --resume",
+      "commit": "4868e24576ae723fa0fa0d5490e464738112f55f",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "gpu_count": 2,
+      "has_config": true,
+      "has_summary": true
+    },
+    {
+      "run": "run-20260313_084250-kk5sklcs",
+      "mode": "online",
+      "startedAt": "2026-03-12T15:53:15.753254Z",
+      "program": "/mnt/SharedData/Research/ACoT-VLA/scripts/train_fast.py",
+      "args": "acot_challenge_generalist_lora_generalist_tuned --exp_name generalists_fast_v1_bs64 --resume",
+      "commit": "4868e24576ae723fa0fa0d5490e464738112f55f",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "gpu_count": 2,
+      "has_config": false,
+      "has_summary": false
+    },
+    {
+      "run": "offline-run-20260311_131353-ll6wbjhk",
+      "mode": "offline",
+      "startedAt": "2026-03-11T05:13:54.027589Z",
+      "program": "/mnt/SharedData/Research/ACoT-VLA/scripts/train_fast.py",
+      "args": "acot_challenge_generalist_lora_generalist --exp_name generalist_v1_bs96_fast_debug_1gpu --overwrite",
+      "commit": "4d0adc8b1f87d1c797baad520bf51d02921b7b1e",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "gpu_count": 2,
+      "has_config": false,
+      "has_summary": false
+    },
+    {
+      "run": "offline-run-20260311_131900-tjmiy55r",
+      "mode": "offline",
+      "startedAt": "2026-03-11T05:19:00.354197Z",
+      "program": "/mnt/SharedData/Research/ACoT-VLA/scripts/train_fast.py",
+      "args": "acot_challenge_generalist_lora_generalist --exp_name generalist_v1_bs96_fast_debug_2gpu --overwrite",
+      "commit": "4d0adc8b1f87d1c797baad520bf51d02921b7b1e",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "gpu_count": 2,
+      "has_config": false,
+      "has_summary": false
+    },
+    {
+      "run": "offline-run-20260311_132516-ic8drn9d",
+      "mode": "offline",
+      "startedAt": "2026-03-11T05:25:16.725450Z",
+      "program": "/mnt/SharedData/Research/ACoT-VLA/scripts/train.py",
+      "args": "acot_challenge_generalist_lora_generalist --exp_name generalist_v1_bs64_debug --overwrite",
+      "commit": "4d0adc8b1f87d1c797baad520bf51d02921b7b1e",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "gpu_count": 2,
+      "has_config": false,
+      "has_summary": false
+    },
+    {
+      "run": "offline-run-20260311_133102-t9yvqcgc",
+      "mode": "offline",
+      "startedAt": "2026-03-11T05:31:02.298432Z",
+      "program": "/mnt/SharedData/Research/ACoT-VLA/scripts/train_fast.py",
+      "args": "acot_challenge_generalist_lora_generalist --exp_name generalist_v1_bs64_debug --overwrite",
+      "commit": "4d0adc8b1f87d1c797baad520bf51d02921b7b1e",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "gpu_count": 2,
+      "has_config": false,
+      "has_summary": false
+    },
+    {
+      "run": "offline-run-20260311_133455-vdxsyrsm",
+      "mode": "offline",
+      "startedAt": "2026-03-11T05:34:55.522061Z",
+      "program": "/mnt/SharedData/Research/ACoT-VLA/scripts/train_fast.py",
+      "args": "acot_challenge_generalist_lora_generalist --exp_name generalist_v1_bs64_debug --overwrite",
+      "commit": "a3983b499a0f21520daafc8ea5e8ef4bc9401755",
+      "gpu": "NVIDIA GeForce RTX 5090",
+      "gpu_count": 2,
+      "has_config": false,
+      "has_summary": false
+    }
+  ],
+  "summaries": [
+    {
+      "run": "run-20260311_122703-cs5i3sx9",
+      "loss": null,
+      "train_loss": null,
+      "val_loss": null,
+      "step": null,
+      "runtime_s": 27
+    },
+    {
+      "run": "run-20260312_220012-vp83y2xf",
+      "loss": 0.10483680665493011,
+      "train_loss": 0.10483680665493011,
+      "val_loss": 0.19592878222465515,
+      "step": 200,
+      "runtime_s": 1893
+    },
+    {
+      "run": "run-20260313_084029-kk5sklcs",
+      "loss": 0.07946635782718658,
+      "train_loss": 0.07946635782718658,
+      "val_loss": 0.13986729085445404,
+      "step": 1900,
+      "runtime_s": 31775
+    }
+  ],
+  "tuned_metrics": {
+    "train_points": 23,
+    "val_points": 3,
+    "ckpt_points": 1,
+    "train_first": {
+      "step": 0,
+      "loss": 0.159114271402359,
+      "lr": 3.9981387089937925e-08,
+      "samples_per_sec": 2.1826938770388504
+    },
+    "train_last": {
+      "step": 1200,
+      "loss": 0.07871299237012863,
+      "lr": 3.951850885641761e-05,
+      "samples_per_sec": 7.980859511347912
+    },
+    "train_best": {
+      "step": 1100,
+      "loss": 0.07377038896083832
+    },
+    "val_series": [
+      {
+        "step": 0,
+        "loss": 0.1959531009197235
+      },
+      {
+        "step": 1000,
+        "loss": 0.13986729085445404
+      },
+      {
+        "step": 2000,
+        "loss": 0.1288643479347229
+      }
+    ],
+    "val_best": {
+      "step": 2000,
+      "loss": 0.1288643479347229
+    },
+    "ckpt_steps": [
+      1000
+    ],
+    "task_cmp_0_2000": [
+      {
+        "task_metric": "train/task/Carry_the_pot/loss",
+        "step0": 0.06073039397597313,
+        "step2000": 0.09006161987781525
+      },
+      {
+        "task_metric": "train/task/Clear_the_desktop/loss",
+        "step0": 0.12114690244197845,
+        "step2000": 0.08802541345357895
+      },
+      {
+        "task_metric": "train/task/Flip_workpiece_icra_SIM/loss",
+        "step0": 0.5110357999801636,
+        "step2000": 0.09633748978376389
+      },
+      {
+        "task_metric": "train/task/Insert_the_building_block_socket_2_SIM/loss",
+        "step0": 0.05817602947354317,
+        "step2000": 0.056275624781847
+      },
+      {
+        "task_metric": "train/task/Pop_the_popcorn/loss",
+        "step0": 0.06547965109348297,
+        "step2000": 0.014986153692007065
+      },
+      {
+        "task_metric": "train/task/Remove_misplaced_beverages_from_shelves/loss",
+        "step0": 0.03279519081115723,
+        "step2000": 0.0228540301322937
+      },
+      {
+        "task_metric": "train/task/Sort_logistics_parcels/loss",
+        "step0": 0.07221168279647827,
+        "step2000": 0.042676374316215515
+      },
+      {
+        "task_metric": "train/task/Stock_shelves_Straighten_ICRA_An_object/loss",
+        "step0": 0.15184395015239716,
+        "step2000": 0.09021870046854019
+      },
+      {
+        "task_metric": "train/task/Stock_shelves_Straighten_objects_Identify_ICRA_or_Recognize_ICRA_depending_on_context_An_object/loss",
+        "step0": 0.3752220869064331,
+        "step2000": 0.09589438885450363
+      },
+      {
+        "task_metric": "train/task/Turn_the_doorknob/loss",
+        "step0": 0.06513113528490067,
+        "step2000": 0.07661015540361404
+      }
+    ]
+  }
+}

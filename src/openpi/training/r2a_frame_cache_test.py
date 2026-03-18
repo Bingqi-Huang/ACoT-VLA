@@ -5,6 +5,7 @@ import pathlib
 import mmap
 
 import numpy as np
+import pytest
 
 import openpi.training.config as _config
 import openpi.training.r2a_frame_cache as r2a_frame_cache
@@ -203,6 +204,23 @@ def test_r2a_frame_cache_dataset_builds_split_manifest_from_cache(tmp_path: path
     payload = json.loads(manifest_path.read_text())
     assert payload["datasets"][0]["repo_id"] == str(tmp_path / "missing_source_root" / "task_a")
     assert payload["datasets"][0]["total_episodes"] == 2
+
+
+def test_r2a_frame_cache_dataset_reports_corrupt_shard_path(tmp_path: pathlib.Path):
+    cache_root = tmp_path / "cache"
+    _write_fake_cache(cache_root)
+    r2a_frame_cache.shard_field_path(cache_root, 0, "observation.state").write_bytes(b"")
+
+    data_config = _config.DataConfig(repo_id=[str(tmp_path / "task_a")])
+    dataset = r2a_frame_cache.R2AFrameCacheDataset(
+        cache_root,
+        data_config,
+        split="all",
+        split_base_dir=tmp_path,
+    )
+
+    with pytest.raises(RuntimeError, match="Corrupt R2A cache shard file"):
+        _ = dataset[0]
 
 
 def test_assemble_final_cache_preserves_index_dtype(tmp_path: pathlib.Path):

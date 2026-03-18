@@ -766,14 +766,23 @@ class R2AFrameCacheDataset:
             self._shard_cache.move_to_end(shard_index)
             return shard_arrays
 
-        shard_arrays = {
-            field.name: np.load(
-                shard_field_path(self._cache_root, shard_index, field.name),
-                mmap_mode="r",
-                allow_pickle=False,
-            )
-            for field in self._manifest.data_fields
-        }
+        shard_arrays = {}
+        for field in self._manifest.data_fields:
+            path = shard_field_path(self._cache_root, shard_index, field.name)
+            try:
+                shard_arrays[field.name] = np.load(path, mmap_mode="r", allow_pickle=False)
+            except FileNotFoundError as exc:
+                raise FileNotFoundError(
+                    f"Missing R2A cache shard file: {path}. "
+                    f"Cache root {self._cache_root} appears incomplete on this machine."
+                ) from exc
+            except (EOFError, ValueError, OSError) as exc:
+                size = path.stat().st_size if path.exists() else None
+                raise RuntimeError(
+                    f"Corrupt R2A cache shard file: {path} (size={size}). "
+                    "The cache was likely copied incompletely or truncated during transfer. "
+                    "Rebuild or re-copy the cache root."
+                ) from exc
         self._shard_cache[shard_index] = shard_arrays
         while len(self._shard_cache) > self._max_open_shards:
             self._shard_cache.popitem(last=False)

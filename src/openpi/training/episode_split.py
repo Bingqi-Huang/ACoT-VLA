@@ -91,6 +91,7 @@ def get_or_create_manifest(
     data_config: _config.DataConfig,
     *,
     base_output_dir: pathlib.Path,
+    dataset_episode_lengths: dict[str, dict[int, int]] | None = None,
 ) -> tuple[EpisodeSplitManifest, pathlib.Path]:
     if data_config.episode_split is None:
         raise ValueError("Episode split is not configured for this dataset.")
@@ -101,7 +102,7 @@ def get_or_create_manifest(
         _validate_manifest(data_config, manifest)
         return manifest, manifest_path
 
-    manifest = _build_manifest(data_config)
+    manifest = _build_manifest(data_config, dataset_episode_lengths=dataset_episode_lengths)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest.to_dict(), indent=2, sort_keys=True) + "\n")
     logger.info("Wrote episode split manifest: %s", manifest_path)
@@ -153,10 +154,23 @@ def report_split(
     print(f"  total | episodes={total_episodes} | frames={total_frames}")
 
 
-def _build_manifest(data_config: _config.DataConfig) -> EpisodeSplitManifest:
+def _build_manifest(
+    data_config: _config.DataConfig,
+    *,
+    dataset_episode_lengths: dict[str, dict[int, int]] | None = None,
+) -> EpisodeSplitManifest:
     assert data_config.episode_split is not None
     repo_ids = resolve_repo_ids(data_config.repo_id)
-    datasets = [_build_dataset_split(repo_id, data_config.episode_split) for repo_id in repo_ids]
+    datasets = []
+    for repo_id in repo_ids:
+        episode_lengths = None if dataset_episode_lengths is None else dataset_episode_lengths.get(repo_id)
+        datasets.append(
+            _build_dataset_split(
+                repo_id,
+                data_config.episode_split,
+                episode_lengths=episode_lengths,
+            )
+        )
     return EpisodeSplitManifest(
         version=_MANIFEST_VERSION,
         seed=data_config.episode_split.seed,
@@ -195,12 +209,21 @@ def _create_dataset_metadata(repo_id: str):
     return lerobot_dataset.LeRobotDatasetMetadata(repo_id)
 
 
-def _build_dataset_split(repo_id: str, split_config: _config.EpisodeSplitConfig) -> DatasetSplit:
-    meta = _create_dataset_metadata(repo_id)
-    episode_lengths = {
-        int(ep_idx): int(meta.episodes[ep_idx]["length"])
-        for ep_idx in sorted(meta.episodes)
-    }
+def _build_dataset_split(
+    repo_id: str,
+    split_config: _config.EpisodeSplitConfig,
+    *,
+    episode_lengths: dict[int, int] | None = None,
+) -> DatasetSplit:
+    if episode_lengths is None:
+        meta = _create_dataset_metadata(repo_id)
+        episode_lengths = {
+            int(ep_idx): int(meta.episodes[ep_idx]["length"])
+            for ep_idx in sorted(meta.episodes)
+        }
+    else:
+        episode_lengths = {int(ep_idx): int(length) for ep_idx, length in episode_lengths.items()}
+
     episode_indices = list(episode_lengths)
     shuffled = list(episode_indices)
     random.Random(_dataset_seed(split_config.seed, repo_id)).shuffle(shuffled)

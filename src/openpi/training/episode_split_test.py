@@ -21,7 +21,7 @@ class _FakeMeta:
 def test_episode_split_manifest_is_deterministic(monkeypatch, tmp_path):
     monkeypatch.setattr(_episode_split.lerobot_dataset, "LeRobotDatasetMetadata", _FakeMeta)
     data_config = _config.DataConfig(
-        repo_id=["/tmp/task_a", "/tmp/task_b"],
+        repo_id=["task_a", "task_b"],
         episode_split=_config.EpisodeSplitConfig(seed=7, train_ratio=0.8, split_name="unit_test_split"),
     )
 
@@ -35,7 +35,7 @@ def test_episode_split_manifest_is_deterministic(monkeypatch, tmp_path):
     payload = json.loads(path_a.read_text())
     assert payload["seed"] == 7
     assert payload["train_ratio"] == 0.8
-    assert [dataset["repo_id"] for dataset in payload["datasets"]] == ["/tmp/task_a", "/tmp/task_b"]
+    assert [dataset["repo_id"] for dataset in payload["datasets"]] == ["task_a", "task_b"]
     assert all(len(dataset["train_episode_indices"]) == 3 for dataset in payload["datasets"])
     assert all(len(dataset["val_episode_indices"]) == 1 for dataset in payload["datasets"])
 

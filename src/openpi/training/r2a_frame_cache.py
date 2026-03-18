@@ -704,9 +704,11 @@ class R2AFrameCacheDataset:
 
         split_episode_lookup: dict[str, np.ndarray] | None = None
         if self._split != "all" and _episode_split.split_enabled(self._data_config):
+            cache_episode_lengths = self._cache_episode_lengths_by_repo_id(repo_ids, repo_array, episode_array)
             manifest, _ = _episode_split.get_or_create_manifest(
                 self._data_config,
                 base_output_dir=self._split_base_dir,
+                dataset_episode_lengths=cache_episode_lengths,
             )
             selected_episodes = _episode_split.episodes_for_split(manifest, self._split)
             if isinstance(selected_episodes, dict):
@@ -735,6 +737,28 @@ class R2AFrameCacheDataset:
         if not selected_parts:
             return np.asarray([], dtype=np.int64)
         return np.concatenate(selected_parts, axis=0)
+
+    def _cache_episode_lengths_by_repo_id(
+        self,
+        repo_ids: Sequence[str],
+        repo_array: np.ndarray,
+        episode_array: np.ndarray,
+    ) -> dict[str, dict[int, int]]:
+        episode_lengths: dict[str, dict[int, int]] = {}
+        for repo_id in repo_ids:
+            repo_name = pathlib.Path(repo_id).name
+            repo_index = self._repo_name_to_index.get(repo_name)
+            if repo_index is None:
+                raise ValueError(f"Configured repo `{repo_name}` is not present in cache {self._cache_root}")
+            repo_episodes = episode_array[repo_array == repo_index]
+            if repo_episodes.size == 0:
+                raise ValueError(f"Configured repo `{repo_name}` has no cached episodes in {self._cache_root}")
+            unique_episodes, counts = np.unique(repo_episodes, return_counts=True)
+            episode_lengths[repo_id] = {
+                int(ep_idx): int(count)
+                for ep_idx, count in zip(unique_episodes.tolist(), counts.tolist(), strict=True)
+            }
+        return episode_lengths
 
     def _load_shard(self, shard_index: int) -> dict[str, np.ndarray]:
         shard_arrays = self._shard_cache.get(shard_index)

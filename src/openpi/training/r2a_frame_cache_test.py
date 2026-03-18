@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pathlib
 import mmap
 
@@ -170,6 +171,38 @@ def test_source_sample_to_cache_sample_preserves_index_dtype():
 
     assert np.asarray(metadata["episode_index"]).dtype == np.int64
     assert np.asarray(metadata["frame_index"]).dtype == np.int64
+
+
+def test_r2a_frame_cache_dataset_builds_split_manifest_from_cache(tmp_path: pathlib.Path):
+    cache_root = tmp_path / "cache"
+    split_dir = tmp_path / "splits"
+    _write_fake_cache(cache_root)
+
+    data_config = _config.DataConfig(
+        repo_id=[str(tmp_path / "missing_source_root" / "task_a")],
+        episode_split=_config.EpisodeSplitConfig(seed=7, train_ratio=0.5, split_name="cache_only_split"),
+    )
+    train_dataset = r2a_frame_cache.R2AFrameCacheDataset(
+        cache_root,
+        data_config,
+        split="train",
+        split_base_dir=split_dir,
+    )
+    val_dataset = r2a_frame_cache.R2AFrameCacheDataset(
+        cache_root,
+        data_config,
+        split="val",
+        split_base_dir=split_dir,
+    )
+
+    assert len(train_dataset) == 1
+    assert len(val_dataset) == 1
+    assert {int(train_dataset[0]["episode_index"]), int(val_dataset[0]["episode_index"])} == {0, 1}
+
+    manifest_path = split_dir / "cache_only_split.json"
+    payload = json.loads(manifest_path.read_text())
+    assert payload["datasets"][0]["repo_id"] == str(tmp_path / "missing_source_root" / "task_a")
+    assert payload["datasets"][0]["total_episodes"] == 2
 
 
 def test_assemble_final_cache_preserves_index_dtype(tmp_path: pathlib.Path):

@@ -185,6 +185,32 @@ class MAPHead(nn.Module):
         return x[:, 0]
 
 
+class _PatchConvAsMatmul(nn.Module):
+    """Non-overlapping patch conv as reshape + matmul (avoids cuDNN conv backward).
+
+    Stores params as ``kernel`` and ``bias`` — the same names as ``nn.Conv`` —
+    so existing checkpoints load without changes.
+    """
+
+    width: int
+    patch_size: Sequence[int]
+
+    @nn.compact
+    def __call__(self, image):
+        pH, pW = self.patch_size
+        B, H, W, C = image.shape
+        kernel = self.param(
+            "kernel", nn.initializers.lecun_normal(), (pH, pW, C, self.width)
+        )
+        bias = self.param("bias", nn.initializers.zeros_init(), (self.width,))
+        # Extract non-overlapping patches
+        patches = image.reshape(B, H // pH, pH, W // pW, pW, C)
+        patches = patches.transpose(0, 1, 3, 2, 4, 5)            # (B, nH, nW, pH, pW, C)
+        patches = patches.reshape(B, H // pH, W // pW, -1)       # (B, nH, nW, pH*pW*C)
+        kernel_2d = kernel.reshape(-1, self.width)                # (pH*pW*C, width)
+        return (patches @ kernel_2d.astype(jnp.float32)) + bias.astype(jnp.float32)
+
+
 class _Module(nn.Module):
     """ViT model."""
 
@@ -212,14 +238,11 @@ class _Module(nn.Module):
         # because I feel like it's a bit safer.
         image = jnp.asarray(image, jnp.float32)
 
-        # Patch extraction
-        x = out["stem"] = nn.Conv(
-            self.width,
-            self.patch_size,
-            strides=self.patch_size,
-            padding="VALID",
-            name="embedding",
-            dtype=jnp.float32,
+        # Patch extraction — implemented as reshape + matmul instead of nn.Conv
+        # to avoid cuDNN conv backward-filter bugs on certain GPUs.
+        # Mathematically identical to nn.Conv with kernel_size == stride (non-overlapping).
+        x = out["stem"] = _PatchConvAsMatmul(
+            self.width, self.patch_size, name="embedding",
         )(image)
 
         n, h, w, c = x.shape

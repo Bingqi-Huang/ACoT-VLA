@@ -2529,6 +2529,87 @@ _CONFIGS = [
         grad_accum_steps=1 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         freeze_filter=_reasoning2action_lora_freeze_filter(),
     ),
+    # Continued training from baseline checkpoint on our 15-dataset corpus.
+    # Matches official freeze strategy (full dual AEs + vision unfrozen, LoRA only in LLM).
+    # Intended for: initialize from checkpoints/baseline/<step>/params and continue.
+    #
+    # Norm stats note: our `reasoning2action_sim_generalist` stats were computed on 15
+    # datasets (superset of the official 9).  The extra datasets are additional episodes
+    # of the same tasks, so mean/std differ only marginally.  The model re-calibrates
+    # within ~1000 steps; no need to recompute norm stats before resuming.
+    TrainConfig(
+        name="acot_challenge_generalist_continued",
+        model=acot_vla.ACOTConfig(
+            coarse_action_horizon=30,
+            action_horizon=30,
+            # LoRA only in the LLM backbone; dual AEs use full Gemma 300M (no LoRA)
+            # to match the official baseline checkpoint structure.
+            paligemma_variant="gemma_2b_lora",
+            coarse_action_expert_variant="gemma_300m",
+            action_expert_variant="gemma_300m",
+            adopt_explicit_action_reasoner=True,
+            adopt_implicit_action_reasoner=True,
+            downsample_based_implicit_extractor=True,
+            max_token_len=210,
+        ),
+        data=dataclasses.replace(
+            _reasoning2action_data_config(
+                _reasoning2action_repo_ids(
+                    "pour_workpiece",
+                    "open_door",
+                    "scoop_popcorn",
+                    "scoop_popcorn_part_2",
+                    "hold_pot",
+                    "place_block_into_box",
+                    "take_wrong_item_shelf",
+                    "stock_and_straighten_shelf",
+                    "stock_and_straighten_shelf_part_2",
+                    "sorting_packages_part_1",
+                    "sorting_packages_part_2",
+                    "sorting_packages_part_3",
+                    "clean_the_desktop_addition",
+                    "clean_the_desktop_part_1",
+                    "clean_the_desktop_part_2",
+                ),
+                asset_id=os.getenv("ACOT_CHALLENGE_GENERALIST_ASSET_ID", "reasoning2action_sim_generalist"),
+                split_name="acot_challenge_generalist_lora_generalist",
+            ),
+        ),
+        # Continuation LR schedule: shorter warmup (model already converged),
+        # lower peak LR (60% of original 5e-5) to avoid disrupting baseline quality.
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=3e-5,
+            decay_steps=30_000,
+            decay_lr=3e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
+            os.getenv(
+                "ACOT_CHALLENGE_INIT_WEIGHTS",
+                "gs://openpi-assets/checkpoints/pi05_base/params",
+            ),
+            missing_init="lora_standard",
+        ),
+        num_train_steps=30_000,
+        save_interval=2000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 100,
+        val_interval=2000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
+        val_num_batches=32 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
+        num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        batch_size=256 if not os.getenv("DEBUG_MODE", default=False) == "true" else 16,
+        grad_accum_steps=1,
+        freeze_filter=acot_vla.ACOTConfig(
+            paligemma_variant="gemma_2b_lora",
+            coarse_action_expert_variant="gemma_300m",
+            action_expert_variant="gemma_300m",
+        ).get_freeze_filter(
+            freeze_vision=False,
+            freeze_llm=True,
+            freeze_llm_embedder=True,
+            freeze_dual_ae=[False, False],
+        ),
+    ),
     # A dummy smoke run with only 1 task (2 parts)
     TrainConfig(
         name="acot_challenge_generalist_lora_clean_desktop",

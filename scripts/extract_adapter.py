@@ -23,13 +23,33 @@ ADAPTER_PATTERNS = (
     "explicit_action_reason_proj",
     "implicit_action_reason_proj",
 )
+# When dual action experts are fully trained (freeze_dual_ae=[False, False]),
+# their weights must be included in the adapter so the routing system can
+# overlay them on top of the base checkpoint.  The suffixes _1 and _2 identify
+# the coarse and fine action expert sub-modules within the shared llm module.
+DUAL_AE_PATTERNS = ("llm_1", "llm_2")
 LORA_ONLY_PATTERNS = ("lora",)
 PATHS_KEY = "__paths__"
 VALUE_KEY_TEMPLATE = "param_{index:04d}"
 
 
-def main(checkpoint: str, output: str, lora_only: bool = False) -> None:
-    patterns = LORA_ONLY_PATTERNS if lora_only else ADAPTER_PATTERNS
+def main(checkpoint: str, output: str, lora_only: bool = False, include_dual_ae: bool = False) -> None:
+    """Extract adapter weights from a checkpoint.
+
+    Args:
+        checkpoint: Path to the checkpoint directory (parent of the params/ sub-dir).
+        output: Output .npz file path.
+        lora_only: Extract only LoRA weights (smallest possible adapter).
+        include_dual_ae: Also extract fully-trained dual action expert weights
+            (llm_1 / llm_2).  Required when the model was trained with
+            freeze_dual_ae=[False, False] (e.g. acot_challenge_generalist_continued).
+    """
+    if lora_only:
+        patterns = LORA_ONLY_PATTERNS
+    elif include_dual_ae:
+        patterns = ADAPTER_PATTERNS + DUAL_AE_PATTERNS
+    else:
+        patterns = ADAPTER_PATTERNS
     checkpoint_path = pathlib.Path(checkpoint)
     params = _model.restore_params(checkpoint_path / "params", restore_type=np.ndarray)
     flat_params = flax.traverse_util.flatten_dict(params, sep="/")

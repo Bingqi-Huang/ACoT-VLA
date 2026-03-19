@@ -27,6 +27,7 @@ We follow this einsum axis naming convention:
 
 from collections.abc import Sequence
 import dataclasses
+import os
 from typing import Literal, TypeAlias
 
 import einops
@@ -49,10 +50,27 @@ class Config:
     num_heads: int
     num_kv_heads: int
     head_dim: int
+    remat_policy: str = "nothing_saveable"
+    scan_unroll: int = 1
     lora_configs: dict[str, lora.LoRAConfig] = dataclasses.field(default_factory=dict)
 
 
 Variant = Literal["dummy", "gemma_300m", "gemma_300m_lora", "gemma_2b", "gemma_2b_lora"]
+
+
+def _runtime_overrides() -> dict[str, int | str]:
+    """Global runtime knobs for debugging compiler/runtime issues.
+
+    These affect the Gemma layer stack implementation without changing parameter
+    names or checkpoint structure.
+    """
+    scan_unroll = int(os.getenv("OPENPI_GEMMA_SCAN_UNROLL", "1"))
+    if scan_unroll < 1:
+        raise ValueError(f"OPENPI_GEMMA_SCAN_UNROLL must be >= 1, got {scan_unroll}")
+    return {
+        "remat_policy": os.getenv("OPENPI_GEMMA_REMAT_POLICY", "nothing_saveable"),
+        "scan_unroll": scan_unroll,
+    }
 
 
 def get_config(variant: Variant) -> Config:
@@ -65,6 +83,7 @@ def get_config(variant: Variant) -> Config:
             num_heads=8,
             num_kv_heads=1,
             head_dim=16,
+            **_runtime_overrides(),
         )
     if variant == "gemma_50m":
         return Config(
@@ -74,6 +93,7 @@ def get_config(variant: Variant) -> Config:
             num_heads=8,
             num_kv_heads=1,
             head_dim=256,
+            **_runtime_overrides(),
         )
     if variant == "gemma_150m":
         # ~160M params
@@ -84,6 +104,7 @@ def get_config(variant: Variant) -> Config:
             num_heads=8,
             num_kv_heads=1,
             head_dim=256,
+            **_runtime_overrides(),
         )
     if variant == "gemma_250m":
         return Config(
@@ -93,6 +114,7 @@ def get_config(variant: Variant) -> Config:
             num_heads=8,
             num_kv_heads=1,
             head_dim=256,
+            **_runtime_overrides(),
         )
     if variant == "gemma_300m":
         # 311M params
@@ -103,6 +125,7 @@ def get_config(variant: Variant) -> Config:
             num_heads=8,
             num_kv_heads=1,
             head_dim=256,
+            **_runtime_overrides(),
         )
     if variant == "gemma_500m":
         return Config(
@@ -112,6 +135,7 @@ def get_config(variant: Variant) -> Config:
             num_heads=8,
             num_kv_heads=1,
             head_dim=256,
+            **_runtime_overrides(),
         )
     if variant == "gemma_600m":
         # 620M params
@@ -122,6 +146,7 @@ def get_config(variant: Variant) -> Config:
             num_heads=8,
             num_kv_heads=1,
             head_dim=256,
+            **_runtime_overrides(),
         )
     if variant == "gemma_2b":
         return Config(
@@ -131,6 +156,7 @@ def get_config(variant: Variant) -> Config:
             num_heads=8,
             num_kv_heads=1,
             head_dim=256,
+            **_runtime_overrides(),
         )
     if variant == "gemma_2b_lora":
         return Config(
@@ -140,6 +166,7 @@ def get_config(variant: Variant) -> Config:
             num_heads=8,
             num_kv_heads=1,
             head_dim=256,
+            **_runtime_overrides(),
             lora_configs={"attn": lora.LoRAConfig(rank=16, alpha=16.0), "ffn": lora.LoRAConfig(rank=16, alpha=16.0)},
         )
     if variant == "gemma_300m_lora":
@@ -151,6 +178,7 @@ def get_config(variant: Variant) -> Config:
             num_heads=8,
             num_kv_heads=1,
             head_dim=256,
+            **_runtime_overrides(),
             lora_configs={"attn": lora.LoRAConfig(rank=32, alpha=32.0), "ffn": lora.LoRAConfig(rank=32, alpha=32.0)},
         )
     raise ValueError(f"Unknown variant: {variant}")
@@ -397,18 +425,23 @@ class Module(nn.Module):
     def setup(self):
         # all experts must have the same depth
         assert all(config.depth == self.configs[0].depth for config in self.configs)
+        assert all(config.remat_policy == self.configs[0].remat_policy for config in self.configs)
+        assert all(config.scan_unroll == self.configs[0].scan_unroll for config in self.configs)
 
         self.embedder = Embedder(
             vocab_size=PALIGEMMA_VOCAB_SIZE,
             embed_dim=self.configs[0].width,  # embedder for first expert only
             name="embedder",
         )
-        block_cls = nn.remat(
-            Block,
-            prevent_cse=False,
-            static_argnums=(5,),  # 0=self, 6=deterministic
-            policy=jax.checkpoint_policies.nothing_saveable,
-        )
+        if self.configs[0].remat_policy == "none":
+            block_cls = Block
+        else:
+            block_cls = nn.remat(
+                Block,
+                prevent_cse=False,
+                static_argnums=(5,),  # 0=self, 6=deterministic
+                policy=getattr(jax.checkpoint_policies, self.configs[0].remat_policy),
+            )
         self.layers = nn.scan(
             block_cls,
             variable_axes={"params": 0},
@@ -421,6 +454,7 @@ class Module(nn.Module):
                 nn.broadcast,
             ),  # 0=kv_cache, 1=positions, 2=mask, 3=adarms_cond, 4=deterministic
             length=self.configs[0].depth,
+            unroll=self.configs[0].scan_unroll,
         )(
             configs=self.configs,
             dropout=self.dropout,

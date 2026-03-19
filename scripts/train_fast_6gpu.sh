@@ -4,6 +4,11 @@ export DEBUG_MODE=false
 export WANDB_MODE=online
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.95
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5
+# Disable XLA constant folding: the cumsum attention-mask op creates large
+# constant tensors at compile time that exhaust CPU RAM and kill the process.
+# Skipping this pass means those constants are computed at runtime on GPU
+# (fast) instead of being materialized by the CPU during compilation.
+export XLA_FLAGS="--xla_disable_hlo_passes=constant_folding"
 
 CONFIG_NAME=${1}
 EXP_NAME=${2}

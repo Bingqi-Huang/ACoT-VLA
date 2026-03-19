@@ -1496,8 +1496,8 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
                     split_name=config_name,
                 ),
                 lr_schedule=_optimizer.CosineDecaySchedule(
-                    warmup_steps=200,
-                    peak_lr=1e-5,
+                    warmup_steps=300,
+                    peak_lr=1.2e-5,
                     decay_steps=num_train_steps,
                     decay_lr=1e-6,
                 ),
@@ -1513,7 +1513,7 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
                 val_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
                 val_num_batches=32 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
                 num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
-                batch_size=120 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
+                batch_size=192 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
                 grad_accum_steps=1,
                 freeze_filter=_reasoning2action_lora_freeze_filter(),
             )

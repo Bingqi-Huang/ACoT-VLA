@@ -124,7 +124,9 @@ def _align_param(expected, loaded, init_method):
 
     if init_method == "zeros":
         new_param = jnp.zeros(expected.shape, dtype=expected.dtype)
-    elif init_method == "random":
+    elif init_method in ("random", "lora_standard"):
+        # For shape mismatches, lora_standard falls back to random fill (the
+        # lora_b-specific zero init only applies to fully missing params).
         new_param = jax.random.normal(jax.random.PRNGKey(0), expected.shape, dtype=expected.dtype) * 0.02
     else:
         raise ValueError(f"Unknown init method: {init_method}")
@@ -208,6 +210,15 @@ def _merge_params(
         if not cloned:
             if init == "zeros":
                 result[k] = jnp.zeros(expected_param.shape, dtype=expected_param.dtype)
+            elif init == "lora_standard":
+                # Standard LoRA convention: lora_b = zero so initial LoRA
+                # contribution is exactly 0, preserving baseline output.
+                # lora_a and everything else uses random init.
+                leaf = key_path.rsplit("/", 1)[-1] if "/" in key_path else key_path
+                if "lora" in leaf and leaf.endswith("_b"):
+                    result[k] = jnp.zeros(expected_param.shape, dtype=expected_param.dtype)
+                else:
+                    result[k] = jax.random.normal(jax.random.PRNGKey(0), expected_param.shape, dtype=expected_param.dtype) * 0.02
             else:
                 result[k] = jax.random.normal(jax.random.PRNGKey(0), expected_param.shape, dtype=expected_param.dtype) * 0.02
             print(f"[WARN] Missing param {key_path}, init as {init}, {expected_param.shape}")

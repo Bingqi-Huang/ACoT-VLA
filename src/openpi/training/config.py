@@ -1483,12 +1483,35 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
     # the dual-expert weight remapping correctly.
     use_baseline_init = "ACOT_CHALLENGE_GENERALIST_WEIGHTS" not in os.environ
 
+    # Specialist model: LoRA only in the LLM backbone; dual AEs use full
+    # gemma_300m (no LoRA) to match the baseline checkpoint structure.
+    # Dual AEs are fully trained (freeze_dual_ae=[False, False]) because
+    # action generation quality depends on them and the weak tasks need AE
+    # updates to improve.  Vision is also unfrozen, matching the baseline.
+    specialist_model = acot_vla.ACOTConfig(
+        coarse_action_horizon=30,
+        action_horizon=30,
+        paligemma_variant="gemma_2b_lora",
+        coarse_action_expert_variant="gemma_300m",
+        action_expert_variant="gemma_300m",
+        adopt_explicit_action_reasoner=True,
+        adopt_implicit_action_reasoner=True,
+        downsample_based_implicit_extractor=True,
+        max_token_len=210,
+    )
+    specialist_freeze_filter = specialist_model.get_freeze_filter(
+        freeze_vision=False,
+        freeze_llm=True,
+        freeze_llm_embedder=True,
+        freeze_dual_ae=[False, False],
+    )
+
     specialist_configs = []
     for config_name, dataset_names, prompt_keys, num_train_steps in _REASONING2ACTION_SPECIALIST_SPECS:
         specialist_configs.append(
             TrainConfig(
                 name=config_name,
-                model=_reasoning2action_lora_model(),
+                model=specialist_model,
                 data=_reasoning2action_data_config(
                     _reasoning2action_repo_ids(*dataset_names),
                     prompt_keys,
@@ -1496,15 +1519,15 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
                     split_name=config_name,
                 ),
                 lr_schedule=_optimizer.CosineDecaySchedule(
-                    warmup_steps=200,
-                    peak_lr=1e-5,
+                    warmup_steps=500,
+                    peak_lr=5e-6,
                     decay_steps=num_train_steps,
-                    decay_lr=1e-6,
+                    decay_lr=5e-7,
                 ),
                 optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-                ema_decay=None,
+                ema_decay=0.999,
                 weight_loader=(
-                    weight_loaders.ACOTCheckpointWeightLoader(generalist_weights)
+                    weight_loaders.ACOTCheckpointWeightLoader(generalist_weights, missing_init="lora_standard")
                     if use_baseline_init
                     else weight_loaders.CheckpointWeightLoader(generalist_weights)
                 ),
@@ -1512,10 +1535,10 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
                 save_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
                 val_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
                 val_num_batches=32 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
-                num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
-                batch_size=120 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
+                num_workers=8 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+                batch_size=192 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
                 grad_accum_steps=1,
-                freeze_filter=_reasoning2action_lora_freeze_filter(),
+                freeze_filter=specialist_freeze_filter,
             )
         )
 

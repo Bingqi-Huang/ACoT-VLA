@@ -2620,7 +2620,7 @@ _CONFIGS = [
         val_interval=2000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
         val_num_batches=32 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
         num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
-        batch_size=256 if not os.getenv("DEBUG_MODE", default=False) == "true" else 16,
+        batch_size=384 if not os.getenv("DEBUG_MODE", default=False) == "true" else 16,
         grad_accum_steps=1,
         freeze_filter=acot_vla.ACOTConfig(
             paligemma_variant="gemma_2b_lora",

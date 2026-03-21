@@ -260,7 +260,32 @@ This compatibility target is architectural intent and partial implementation sta
   - GPU can sustain much higher power draw
 - Multi-GPU behavior is still under investigation:
   - both `scripts/train.py` and `scripts/train_fast.py` have shown very slow startup / first-step behavior on dual GPU
-  - this currently looks more like JAX/XLA multi-GPU initialization / compilation cost than a fast-loader-only problem
+- this currently looks more like JAX/XLA multi-GPU initialization / compilation cost than a fast-loader-only problem
+
+### RTX PRO 6000 Blackwell (6x96GB) CUDA13 Requirement
+
+- Confirmed on 2026-03-21:
+  - older CUDA12-era JAX stack can fail with `CUDA_ERROR_ILLEGAL_ADDRESS` during early replicated training steps for `acot_challenge_generalist_continued`.
+- Use CUDA13 JAX stack for Blackwell in this repo:
+  - `jax[cuda13]==0.7.2`
+  - `jaxlib==0.7.2`
+  - backend should report `cuda 13000`.
+
+Quick check:
+
+```bash
+uv run python - <<'PY'
+import jax
+print(jax.__version__)
+print(jax.devices()[0].client.platform_version)
+PY
+```
+
+- If startup fails after environment upgrade with:
+  - `TypeError: 'StepMetadata' object is not subscriptable`
+  this is an Orbax metadata API mismatch in checkpoint restore, not a CUDA kernel issue.
+- Fix path is documented in:
+  - `AGENTS/debug_cuda_illegal_address_2026-03-21.md`
 
 ## Batch Size Heuristic
 

@@ -1,4 +1,5 @@
 import abc
+from collections.abc import Mapping
 from collections.abc import Sequence
 import dataclasses
 import enum
@@ -319,7 +320,25 @@ def restore_params(
 
     with ocp.PyTreeCheckpointer() as ckptr:
         metadata = ckptr.metadata(params_path)
-        item = {"params": metadata["params"]}
+        params_metadata = None
+        if isinstance(metadata, Mapping):
+            params_metadata = metadata.get("params")
+        elif hasattr(metadata, "item_metadata"):
+            item_metadata = metadata.item_metadata
+            if isinstance(item_metadata, Mapping):
+                params_metadata = item_metadata.get("params")
+            else:
+                try:
+                    params_metadata = item_metadata["params"]
+                except (KeyError, TypeError):
+                    params_metadata = None
+
+        # Fallback for older/simpler checkpoint metadata shapes where the
+        # returned metadata is already the params tree.
+        if params_metadata is None:
+            params_metadata = metadata
+
+        item = {"params": params_metadata}
 
         params = ckptr.restore(
             params_path,

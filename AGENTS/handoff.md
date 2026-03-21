@@ -18,6 +18,34 @@ Immediate next step:
 
 ## Current Note
 
+Date: 2026-03-21
+
+Author: Codex
+
+What changed:
+
+- Fixed Blackwell training blocker for `acot_challenge_generalist_continued`:
+  - moved environment to CUDA13 JAX stack (`jax[cuda13]==0.7.2`, `jaxlib==0.7.2`, NumPy 2.x, Orbax 0.11.33).
+- Patched Orbax restore compatibility in `src/openpi/models/model.py`:
+  - `restore_params()` now supports `StepMetadata.item_metadata["params"]` and legacy dict-style metadata.
+- Added incident documentation for future agents:
+  - `AGENTS/debug_cuda_illegal_address_2026-03-21.md`
+  - cross-references added in `AGENTS/README.md`, `AGENTS/runbook_training.md`, and `AGENTS/status.md`.
+
+What was verified:
+
+- Real 6-GPU run on `RTX PRO 6000 Blackwell` advanced to training steps after fixes:
+  - progressed to `5/30000` before manual stop.
+- No `CUDA_ERROR_ILLEGAL_ADDRESS` appeared in the fixed run log.
+
+What is still broken or unknown:
+
+- RLDS dependency group is intentionally left incompatible with this CUDA13 + NumPy2 stack unless separately modernized; this does not affect current Reasoning2Action training path.
+
+Immediate next step:
+
+- Launch the full run with final experiment name and monitor first 50-100 steps for stability and throughput trend.
+
 Date: 2026-03-14
 
 Author: GitHub Copilot

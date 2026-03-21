@@ -1,6 +1,31 @@
 # Status
 
-Last updated: 2026-03-12
+Last updated: 2026-03-21
+
+## Session 2026-03-21: Blackwell CUDA illegal-address fix for continued generalist training
+
+- Target config:
+  - `acot_challenge_generalist_continued`
+- Failure mode (before fix):
+  - multi-GPU run on 6x `RTX PRO 6000 Blackwell` failed with `CUDA_ERROR_ILLEGAL_ADDRESS`.
+- Environment fix:
+  - upgraded to CUDA13 JAX stack:
+    - `jax[cuda13]==0.7.2`
+    - `jaxlib==0.7.2`
+    - `numpy>=2.0.0,<3.0.0`
+    - `orbax-checkpoint==0.11.33`
+    - `ml-dtypes==0.5.3`
+  - runtime check now reports `cuda 13000`.
+- Code compatibility fix:
+  - patched `src/openpi/models/model.py::restore_params()` to handle Orbax `StepMetadata` (`item_metadata["params"]`) as well as legacy dict-style metadata.
+- Validation result:
+  - run `acot_challenge_generalist_continued_cuda13_fix1` successfully passed:
+    - checkpoint restore
+    - train-state initialization
+    - real step advancement (`5/30000` before manual stop)
+  - no `CUDA_ERROR_ILLEGAL_ADDRESS` in this fixed run log.
+- Incident log:
+  - `AGENTS/debug_cuda_illegal_address_2026-03-21.md`
 
 ## Session 2026-03-14: Routed clean-desktop-1500 serving readiness
 

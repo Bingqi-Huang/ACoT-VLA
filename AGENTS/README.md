@@ -45,6 +45,8 @@ Every agent must read this folder before making substantial changes. At minimum,
   Decision log with rationale and consequences.
 - `runbook_training.md`
   Training workflow and operational checklist.
+- `debug_cuda_illegal_address_2026-03-21.md`
+  Blackwell CUDA illegal-address incident log and the confirmed fix path.
 - `runbook_submission.md`
   Submission packaging and registry push checklist.
 - `experiments.md`

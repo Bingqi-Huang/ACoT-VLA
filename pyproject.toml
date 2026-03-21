@@ -15,15 +15,15 @@ dependencies = [
     "fsspec[gcs]>=2024.6.0",
     "gym-aloha>=0.1.1",
     "imageio>=2.36.1",
-    "jax[cuda12]==0.5.3",
+    "jax[cuda13]==0.7.2",
     "jaxtyping==0.2.36",
     "lerobot",
     "ml_collections==1.0.0",
-    "numpy>=1.22.4,<2.0.0",
+    "numpy>=2.0.0,<3.0.0",
     "numpydantic>=1.6.6",
     "opencv-python>=4.10.0.84",
     "openpi-client",
-    "orbax-checkpoint==0.11.13",
+    "orbax-checkpoint==0.11.33",
     "pillow>=11.0.0",
     "sentencepiece>=0.2.0",
     "torch>=2.7.0",
@@ -54,13 +54,12 @@ dev = [
     "pynvml>=12.0.0",
 ]
 rlds = [
-    "dlimp",
-    "tensorflow-cpu==2.15.0",
-    "tensorflow-datasets==4.9.9",
+    # Legacy RLDS stack (`dlimp` -> `tensorflow==2.15`) is incompatible with
+    # NumPy 2.x, which is required by modern JAX CUDA13 wheels.
 ]
 
 [tool.uv]
-override-dependencies = ["ml-dtypes==0.4.1", "tensorstore==0.1.74", "av==14.0.1"]
+override-dependencies = ["ml-dtypes==0.5.3", "tensorstore==0.1.74", "av==14.0.1"]
 
 [tool.uv.sources]
 openpi-client = { workspace = true }

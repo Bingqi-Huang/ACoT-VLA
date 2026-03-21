@@ -6,6 +6,18 @@ Current mainline note:
 - the clean-desktop path below is still useful as a smoke path, but its old checkpoint examples should be treated as placeholders unless that experiment is re-run and retained
 - routed serving and fast-path training both exist in code, but neither should be treated as the default entrypoint yet
 
+## 2026-03-21 Blackwell CUDA fix snapshot
+
+- For 6x `RTX PRO 6000 Blackwell`, use CUDA13 JAX stack.
+- Old CUDA12-era stack hit `CUDA_ERROR_ILLEGAL_ADDRESS` on `acot_challenge_generalist_continued`.
+- After upgrading to Orbax 0.11.33, checkpoint restore needed compatibility fix:
+  - `src/openpi/models/model.py::restore_params()` now handles Orbax `StepMetadata`.
+- Confirmed fixed run advanced real training steps (manual stop at step 5).
+
+Agent-facing incident details are recorded in:
+
+- `AGENTS/debug_cuda_illegal_address_2026-03-21.md`
+
 # Clean Desktop Test-Server Plan
 
 This note is for a **single-model test submission** using `acot_challenge_generalist_lora_clean_desktop`.

@@ -275,3 +275,24 @@ Consequence:
   - prompt/task/frame metadata
 - Keep normalization, tokenization, padding, and config-specific action slicing in the fast loader at runtime.
 - The cache remains training-only infrastructure and must not affect checkpoint layout, offline eval inputs, or final Docker/websocket serving.
+
+Date: 2026-03-21
+
+Decision:
+
+- Standardize Blackwell training on CUDA13 JAX stack and keep Orbax-restore compatibility guards in-tree.
+
+Why:
+
+- `RTX PRO 6000 Blackwell` training with older CUDA12-era JAX stack showed `CUDA_ERROR_ILLEGAL_ADDRESS` in early replicated steps.
+- After upgrading JAX/Orbax, checkpoint restore broke due to metadata API drift (`StepMetadata` vs dict), so compatibility handling is required to keep older/newer checkpoints loadable.
+
+Consequence:
+
+- Keep these dependency baselines unless there is a fully re-validated replacement:
+  - `jax[cuda13]==0.7.2`
+  - `jaxlib==0.7.2`
+  - `orbax-checkpoint==0.11.33`
+  - NumPy 2.x
+- Preserve `restore_params()` metadata compatibility logic in `src/openpi/models/model.py`.
+- Future dependency upgrades must include a real multi-GPU smoke run and checkpoint-restore validation, not only import-level checks.

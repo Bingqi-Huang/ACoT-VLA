@@ -2600,10 +2600,11 @@ _CONFIGS = [
         ),
         # Continuation LR schedule: shorter warmup (model already converged),
         # lower peak LR (60% of original 5e-5) to avoid disrupting baseline quality.
+        # decay_steps matches num_train_steps so cosine anneals fully within the run.
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=1_000,
+            warmup_steps=500,
             peak_lr=3e-5,
-            decay_steps=30_000,
+            decay_steps=10_000,
             decay_lr=3e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
@@ -2615,9 +2616,9 @@ _CONFIGS = [
             ),
             missing_init="lora_standard",
         ),
-        num_train_steps=30_000,
-        save_interval=2000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 100,
-        val_interval=2000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
+        num_train_steps=10_000,
+        save_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 100,
+        val_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
         val_num_batches=32 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
         num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         batch_size=144 if not os.getenv("DEBUG_MODE", default=False) == "true" else 16,

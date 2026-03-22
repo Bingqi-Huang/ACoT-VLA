@@ -1335,34 +1335,43 @@ _REASONING2ACTION_PROMPT_MAP = {
     ),
 }
 # Specialist specs: (config_name, dataset_names, prompt_keys, num_train_steps)
-# Steps are calibrated to ~1-2 epochs at batch_size=288 (96 GB VRAM, 1 GPU per specialist).
+# batch_size=192 across 2 GPUs = 96 per GPU (safe for 96 GB VRAM; same per-GPU load
+# as the known-working generalist at 48/GPU with FSDP, but with far less model-state
+# pressure because vision is frozen — no vision grads or Adam states).
+# Run 3 tasks in parallel on GPUs {0,1}, {2,3}, {4,5}; chain remaining 2.
+#
+# Step counts calibrated to ~2-3 epochs at batch_size=192 using train_fast.py with cache.
 # Dataset frame counts (measured):
-#   clean_desktop: part_1=308k, part_2=254k, addition=568k → 1.13M total → 1 epoch ≈ 3.9k steps → 5000 (~1.3 ep)
-#   stock_shelf:   shelf=104k, shelf_part_2=95k           →  200k total → 1 epoch ≈  694 steps → 2000 (~2.9 ep)
-#   place_block:   place_block=188k                        →  188k total → 1 epoch ≈  653 steps → 2000 (~3.1 ep)
-#   sorting:       part_1+2+3 (not measured)               →  unknown    →                       → 5000
-#   pour_workpiece: not measured                           →  unknown    →                       → 5000
+#   clean_desktop: part_1=308k, part_2=254k, addition=568k → 1.13M total → 1 epoch ≈ 5.9k steps → 7500 (~1.3 ep)
+#   stock_shelf:   shelf=104k, shelf_part_2=95k           →  200k total → 1 epoch ≈ 1.0k steps → 3000 (~2.9 ep)
+#   place_block:   place_block=188k                        →  188k total → 1 epoch ≈  979 steps → 3000 (~3.1 ep)
+#   sorting:       part_1+2+3 (not measured)               →  unknown    →                       → 7500
+#   pour_workpiece: not measured                           →  unknown    →                       → 7500
 #   others (open_door, scoop_popcorn, hold_pot): already 1.0 — skip training
 _REASONING2ACTION_SPECIALIST_SPECS: tuple[tuple[str, tuple[str, ...], tuple[str, ...], int], ...] = (
-    ("acot_specialist_pour_workpiece", ("pour_workpiece",), ("Unload workpiece_icra_SIM",), 5000),
-    ("acot_specialist_open_door", ("open_door",), ("Turn the doorknob",), 5000),
-    ("acot_specialist_scoop_popcorn", ("scoop_popcorn",), ("Make popcorn",), 5000),
-    ("acot_specialist_hold_pot", ("hold_pot",), ("Carry the pot",), 5000),
-    ("acot_specialist_place_block", ("place_block_into_box",), ("Insert building block holes_2_SIM",), 2000),
-    ("acot_specialist_take_wrong_item", ("take_wrong_item_shelf",), ("Remove misplaced beverages from shelves",), 5000),
+    # Tasks already at 1.0 in baseline eval — keep low step count (rarely used).
+    ("acot_specialist_open_door", ("open_door",), ("Turn the doorknob",), 3000),
+    ("acot_specialist_scoop_popcorn", ("scoop_popcorn",), ("Make popcorn",), 3000),
+    ("acot_specialist_hold_pot", ("hold_pot",), ("Carry the pot",), 3000),
+    # take_wrong_item at 0.97 — low priority.
+    ("acot_specialist_take_wrong_item", ("take_wrong_item_shelf",), ("Remove misplaced beverages from shelves",), 3000),
+    # Weak tasks — primary training targets (batch_size=192, 2 GPUs each).
+    # step counts at batch=192: stock_shelf ~2.9 ep, place_block ~3.1 ep, clean_desktop ~1.3 ep.
+    ("acot_specialist_pour_workpiece", ("pour_workpiece",), ("Unload workpiece_icra_SIM",), 7500),
+    ("acot_specialist_place_block", ("place_block_into_box",), ("Insert building block holes_2_SIM",), 3000),
     (
         "acot_specialist_stock_shelf",
         ("stock_and_straighten_shelf", "stock_and_straighten_shelf_part_2"),
         ("Stock supermarket shelves  \nStraighten products  \nAttend ICRA conference  \nOperate SIM card",),
-        2000,
+        3000,
     ),
-    ("acot_specialist_sorting", ("sorting_packages_part_1", "sorting_packages_part_2", "sorting_packages_part_3"), ("Sort packages",), 5000),
+    ("acot_specialist_sorting", ("sorting_packages_part_1", "sorting_packages_part_2", "sorting_packages_part_3"), ("Sort packages",), 7500),
     # clean_the_desktop_addition (211 ep, 568k frames) included alongside part_1 and part_2.
     (
         "acot_specialist_clean_desktop",
         ("clean_the_desktop_part_1", "clean_the_desktop_part_2", "clean_the_desktop_addition"),
         ("Clear the desktop",),
-        5000,
+        7500,
     ),
 )
 
@@ -1541,10 +1550,10 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
                 save_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
                 val_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
                 val_num_batches=32 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
-                # batch_size=288 is comfortable for 96 GB VRAM on a single GPU.
-                # Run 5 specialists in parallel on 5 separate GPUs (CUDA_VISIBLE_DEVICES=N).
+                # batch_size=192 across 2 GPUs = 96 per GPU (safe for 96 GB VRAM).
+                # Run 3 tasks in parallel: CUDA_VISIBLE_DEVICES=0,1 / 2,3 / 4,5; chain remaining 2.
                 num_workers=12 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
-                batch_size=288 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
+                batch_size=192 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
                 grad_accum_steps=1,
                 freeze_filter=specialist_freeze_filter,
             )

@@ -1550,10 +1550,10 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
                 save_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
                 val_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
                 val_num_batches=32 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
-                # batch_size=192 across 2 GPUs = 96 per GPU (safe for 96 GB VRAM).
-                # Run 3 tasks in parallel: CUDA_VISIBLE_DEVICES=0,1 / 2,3 / 4,5; chain remaining 2.
+                # batch_size=288 across 6 GPUs = 48 per GPU (matches generalist training regime).
+                # Run sequentially one task at a time using train_fast_6gpu.sh.
                 num_workers=12 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
-                batch_size=192 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
+                batch_size=288 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
                 grad_accum_steps=1,
                 freeze_filter=specialist_freeze_filter,
             )

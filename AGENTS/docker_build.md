@@ -44,9 +44,9 @@ ls adapters/clean_the_desktop_5000.npz
 If adapter has not been extracted yet:
 
 ```bash
-uv run ./scripts/extract_adapter.py \
-    --checkpoint ./checkpoint/specialists_clean_5000/ \
-    --output ./adapters/clean_the_desktop_5000
+JAX_PLATFORMS=cpu CUDA_VISIBLE_DEVICES='' uv run ./scripts/extract_adapter.py \
+    --checkpoint ./checkpoint/specialists-open/ \
+    --output ./adapters/acot_specialist_open_door
 ```
 
 ## 1.1) Personal rsync Staging Commands (Keep)
@@ -54,9 +54,9 @@ uv run ./scripts/extract_adapter.py \
 These are preserved for manual checkpoint sync from your training machine:
 
 ```bash
-rsync -avP -e "ssh -p 2222" /data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_clean_desktop/exp_specialist_clean/5000/params bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-clean-5000/checkpoint/specialists_clean_5000/
-rsync -avP -e "ssh -p 2222" /data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_clean_desktop/exp_specialist_clean/5000/assets bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-clean-5000/checkpoint/specialists_clean_5000/
-rsync -avP -e "ssh -p 2222" /data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_clean_desktop/exp_specialist_clean/5000/_CHECKPOINT_METADATA bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-clean-5000/checkpoint/specialists_clean_5000/
+rsync -avP -e "ssh -p 2222" /home/bingqi/data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_open_door/acot_specialist_open_door/4500/params bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-box-pour-scoop-stock-pot-open/checkpoint/specialists-open/
+rsync -avP -e "ssh -p 2222" /home/bingqi/data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_open_door/acot_specialist_open_door/4500/assets bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-box-pour-scoop-stock-pot-open/checkpoint/specialists-open/
+rsync -avP -e "ssh -p 2222" /home/bingqi/data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_open_door/acot_specialist_open_door/4500/_CHECKPOINT_METADATA bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-box-pour-scoop-stock-pot-open/checkpoint/specialists-open/
 ```
 
 After extraction, the full specialist checkpoint is not required in the image build context:
@@ -84,7 +84,7 @@ Build command:
 ```bash
 docker build --no-cache \
     -f scripts/docker/serve_policy.Dockerfile \
-    -t routed-clean-desktop-5000:latest \
+    -t routed-box-pour-scoop-stock-pot-open:latest  \
     .
 ```
 
@@ -93,9 +93,9 @@ docker build --no-cache \
 Use the same run style as official docs (no extra custom env args):
 
 ```bash
-docker run -it --rm --network=host --gpus all \
-    -e XLA_PYTHON_CLIENT_MEM_FRACTION=0.3 \
-    routed-clean-desktop-5000:latest
+docker run -it --rm --network=host --gpus "device=1" \
+    -e XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
+    routed-box-pour-scoop-stock-pot-open:latest
 ```
 
 Success signal in logs:
@@ -127,9 +127,9 @@ python3 scripts/stat_average.py
 
 ```bash
 docker login sim-icra-registry.cn-beijing.cr.aliyuncs.com
-docker tag routed-clean-desktop-5000:latest \
-    sim-icra-registry.cn-beijing.cr.aliyuncs.com/<namespace>/routed-clean-desktop-5000:latest
-docker push sim-icra-registry.cn-beijing.cr.aliyuncs.com/<namespace>/routed-clean-desktop-5000:latest
+docker tag routed-clean-box:latest \
+    sim-icra-registry.cn-beijing.cr.aliyuncs.com/onecable/routed-clean-box:latest
+docker push sim-icra-registry.cn-beijing.cr.aliyuncs.com/onecable/routed-clean-box:latest
 ```
 
 Submit the full image URL on the platform and select model type `abs_joint`.

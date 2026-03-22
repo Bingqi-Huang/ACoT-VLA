@@ -29,8 +29,13 @@ VALUE_KEY_TEMPLATE = "param_{index:04d}"
 # Route only tasks that have a prepared adapter in the current submission package.
 # Other tasks fall through to _base.
 TASK_ROUTING = {
-    "clean_the_desktop": "acot_specialist_clean_desktop",
+    # "clean_the_desktop": "acot_specialist_clean_desktop",
     "place_block_into_box": "acot_specialist_place_block",
+    "pour_workpiece":"acot_specialist_pour_workpiece",
+    "scoop_popcorn":"acot_specialist_scoop_popcorn",
+    "stock_and_straighten_shelf": "acot_specialist_stock_shelf",
+    "hold_pot": "acot_specialist_hold_pot",
+    "open_door": "acot_specialist_open_door",
 }
 
 

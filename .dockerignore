@@ -10,3 +10,6 @@ __pycache__
 wandb
 logs
 checkpoint/specialists_clean_1500
+AGENTS/
+docs/
+examples/

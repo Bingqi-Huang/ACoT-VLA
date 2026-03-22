@@ -9,4 +9,6 @@ __pycache__
 .vscode
 wandb
 logs
+# Exclude all checkpoint subdirs except the generalist we're submitting.
+checkpoint/baseline
 checkpoint/specialists_clean_1500

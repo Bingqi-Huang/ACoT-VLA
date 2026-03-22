@@ -26,10 +26,20 @@ logger = logging.getLogger(__name__)
 
 PATHS_KEY = "__paths__"
 VALUE_KEY_TEMPLATE = "param_{index:04d}"
-# Route only tasks that have a prepared adapter in the current submission package.
-# Other tasks fall through to _base.
+
+# Maps ICRA evaluator sub_task_name → adapter NPZ stem (filename without .npz).
+# task_name strings must exactly match the sub_task_name sent by the Genie Sim
+# evaluator websocket, which equals the dataset sub_task_name / prompt-map key.
+# Tasks already at 1.0 (open_door, scoop_popcorn, hold_pot) are intentionally
+# left unrouted so they use the generalist base without any overlay.
+# take_wrong_item is omitted (0.97) — specialist risk > reward.
 TASK_ROUTING = {
-    "clean_the_desktop": "clean_the_desktop_1500",
+    # Weak tasks — route to specialist adapters extracted with --include-dual-ae
+    "Clear the desktop": "clean_desktop",
+    "Stock supermarket shelves  \nStraighten products  \nAttend ICRA conference  \nOperate SIM card": "stock_shelf",
+    "Insert building block holes_2_SIM": "place_block",
+    "Sort packages": "sorting",
+    "Unload workpiece_icra_SIM": "pour_workpiece",
 }
 
 

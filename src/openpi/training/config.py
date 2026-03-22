@@ -1335,24 +1335,26 @@ _REASONING2ACTION_PROMPT_MAP = {
     ),
 }
 # Specialist specs: (config_name, dataset_names, prompt_keys, num_train_steps)
-# Steps are calibrated to ~1-2 epochs at batch_size=120.
+# Steps are calibrated to ~1-2 epochs at batch_size=288 (96 GB VRAM, 1 GPU per specialist).
 # Dataset frame counts (measured):
-#   clean_desktop: part_1=308k, part_2=254k, addition=568k → 1.13M total → 1 epoch ≈ 9.4k steps → 8000
-#   stock_shelf:   shelf=104k, shelf_part_2=95k           →  200k total → 1 epoch ≈ 1.7k steps → 3000 (1.8 ep)
-#   place_block:   place_block=188k                        →  188k total → 1 epoch ≈ 1.6k steps → 3000 (1.9 ep)
-#   others:        not yet measured, defaulting to 5000
+#   clean_desktop: part_1=308k, part_2=254k, addition=568k → 1.13M total → 1 epoch ≈ 3.9k steps → 5000 (~1.3 ep)
+#   stock_shelf:   shelf=104k, shelf_part_2=95k           →  200k total → 1 epoch ≈  694 steps → 2000 (~2.9 ep)
+#   place_block:   place_block=188k                        →  188k total → 1 epoch ≈  653 steps → 2000 (~3.1 ep)
+#   sorting:       part_1+2+3 (not measured)               →  unknown    →                       → 5000
+#   pour_workpiece: not measured                           →  unknown    →                       → 5000
+#   others (open_door, scoop_popcorn, hold_pot): already 1.0 — skip training
 _REASONING2ACTION_SPECIALIST_SPECS: tuple[tuple[str, tuple[str, ...], tuple[str, ...], int], ...] = (
     ("acot_specialist_pour_workpiece", ("pour_workpiece",), ("Unload workpiece_icra_SIM",), 5000),
     ("acot_specialist_open_door", ("open_door",), ("Turn the doorknob",), 5000),
     ("acot_specialist_scoop_popcorn", ("scoop_popcorn",), ("Make popcorn",), 5000),
     ("acot_specialist_hold_pot", ("hold_pot",), ("Carry the pot",), 5000),
-    ("acot_specialist_place_block", ("place_block_into_box",), ("Insert building block holes_2_SIM",), 3000),
+    ("acot_specialist_place_block", ("place_block_into_box",), ("Insert building block holes_2_SIM",), 2000),
     ("acot_specialist_take_wrong_item", ("take_wrong_item_shelf",), ("Remove misplaced beverages from shelves",), 5000),
     (
         "acot_specialist_stock_shelf",
         ("stock_and_straighten_shelf", "stock_and_straighten_shelf_part_2"),
         ("Stock supermarket shelves  \nStraighten products  \nAttend ICRA conference  \nOperate SIM card",),
-        3000,
+        2000,
     ),
     ("acot_specialist_sorting", ("sorting_packages_part_1", "sorting_packages_part_2", "sorting_packages_part_3"), ("Sort packages",), 5000),
     # clean_the_desktop_addition (211 ep, 568k frames) included alongside part_1 and part_2.
@@ -1360,7 +1362,7 @@ _REASONING2ACTION_SPECIALIST_SPECS: tuple[tuple[str, tuple[str, ...], tuple[str,
         "acot_specialist_clean_desktop",
         ("clean_the_desktop_part_1", "clean_the_desktop_part_2", "clean_the_desktop_addition"),
         ("Clear the desktop",),
-        8000,
+        5000,
     ),
 )
 
@@ -1483,11 +1485,15 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
     # the dual-expert weight remapping correctly.
     use_baseline_init = "ACOT_CHALLENGE_GENERALIST_WEIGHTS" not in os.environ
 
-    # Specialist model: LoRA only in the LLM backbone; dual AEs use full
-    # gemma_300m (no LoRA) to match the baseline checkpoint structure.
+    # Specialist model: same architecture as acot_challenge_generalist_continued
+    # (LoRA only in LLM backbone; full gemma_300m for dual AEs).
+    # Vision is FROZEN: the generalist already provides a strong vision encoder,
+    # specialists train on small single-task datasets and would overfit vision.
+    # Freezing vision also avoids a train/serve mismatch — vision weights are not
+    # included in the adapter NPZ (only LoRA + connection layers + dual AEs are),
+    # so the serving base (generalist) vision weights are always used.
     # Dual AEs are fully trained (freeze_dual_ae=[False, False]) because
-    # action generation quality depends on them and the weak tasks need AE
-    # updates to improve.  Vision is also unfrozen, matching the baseline.
+    # action generation quality is the bottleneck for weak tasks.
     specialist_model = acot_vla.ACOTConfig(
         coarse_action_horizon=30,
         action_horizon=30,
@@ -1500,7 +1506,7 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
         max_token_len=210,
     )
     specialist_freeze_filter = specialist_model.get_freeze_filter(
-        freeze_vision=False,
+        freeze_vision=True,
         freeze_llm=True,
         freeze_llm_embedder=True,
         freeze_dual_ae=[False, False],
@@ -1535,8 +1541,10 @@ def _make_reasoning2action_specialist_configs() -> list[TrainConfig]:
                 save_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
                 val_interval=500 if not os.getenv("DEBUG_MODE", default=False) == "true" else 50,
                 val_num_batches=32 if not os.getenv("DEBUG_MODE", default=False) == "true" else 2,
-                num_workers=8 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
-                batch_size=192 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
+                # batch_size=288 is comfortable for 96 GB VRAM on a single GPU.
+                # Run 5 specialists in parallel on 5 separate GPUs (CUDA_VISIBLE_DEVICES=N).
+                num_workers=12 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+                batch_size=288 if not os.getenv("DEBUG_MODE", default=False) == "true" else 4,
                 grad_accum_steps=1,
                 freeze_filter=specialist_freeze_filter,
             )

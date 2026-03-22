@@ -13,15 +13,16 @@ export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_autotune_level=0}"
 
 export OPENPI_DATA_HOME=${OPENPI_DATA_HOME:-/root/.cache/openpi}
 export PYTHONPATH="/submission:/submission/src:/submission/packages/openpi-client/src${PYTHONPATH:+:${PYTHONPATH}}"
-export ACOT_ROUTED_CONFIG=${ACOT_ROUTED_CONFIG:-acot_challenge_lora_conservative}
-export ACOT_ROUTED_BASE_CHECKPOINT=${ACOT_ROUTED_BASE_CHECKPOINT:-/submission/checkpoint/baseline/30000}
+# Config must match the architecture of the base checkpoint (generalist_continued uses
+# gemma_300m dual AEs + gemma_2b_lora backbone — same as the official baseline structure).
+export ACOT_ROUTED_CONFIG=${ACOT_ROUTED_CONFIG:-acot_challenge_generalist_continued}
+export ACOT_ROUTED_BASE_CHECKPOINT=${ACOT_ROUTED_BASE_CHECKPOINT:-/submission/checkpoint/generalist_continued}
 export ACOT_ROUTED_ADAPTER_DIR=${ACOT_ROUTED_ADAPTER_DIR:-/submission/adapters}
-export ACOT_ROUTED_SPECIALIST_NORM_STATS_PATH=${ACOT_ROUTED_SPECIALIST_NORM_STATS_PATH:-/submission/assets/reasoning2action_sim_generalist/norm_stats.json}
+# All tasks share norm stats embedded inside the generalist checkpoint dir
+# (checkpoint/generalist_continued/assets/reasoning2action_sim_generalist/).
+# No specialist norm stats override needed.
 
 extra_args=()
-if [[ -n "${ACOT_ROUTED_SPECIALIST_NORM_STATS_PATH}" ]]; then
-  extra_args+=(--policy.specialist-norm-stats-path "${ACOT_ROUTED_SPECIALIST_NORM_STATS_PATH}")
-fi
 
 cd /submission
 exec uv run --no-sync python scripts/serve_policy.py \

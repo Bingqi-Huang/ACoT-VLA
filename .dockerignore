@@ -9,4 +9,7 @@ __pycache__
 .vscode
 wandb
 logs
+# Routed-submission artifacts (not used by generalist-v2 image)
 checkpoint/specialists_clean_1500
+checkpoint/baseline
+adapters

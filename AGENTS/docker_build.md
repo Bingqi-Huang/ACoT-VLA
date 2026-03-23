@@ -1,83 +1,56 @@
-# Steps for building and testing routed submit-ready image
+# Steps for building and testing the generalist-v2.1 submit-ready image
 
 ## Why this setup
 
-Goal for challenge routing:
+This image serves a single checkpoint policy with no routing and no adapters.
 
-- Keep baseline capability for non-target tasks.
-- Use task-specific adapter only when the route key matches.
+Model source:
 
-This image now follows that contract:
+- Training config: `acot_challenge_generalist_continued`
+- Defined in: `src/openpi/training/config.py`
+- Serving mode: `policy:checkpoint`
+- Launch script: `scripts/server_submit_generalist_v2.sh`
+- Dockerfile: `scripts/docker/serve_generalist_v2.Dockerfile`
 
-- base checkpoint: baseline (`checkpoint/baseline/30000`)
-- default adapter: `_default.npz` (empty / zero-LoRA behavior)
-- task adapter: `clean_the_desktop_1500.npz`
+Checkpoint contract:
 
-Implementation note:
-LoRA config params missing from the baseline checkpoint are zero-initialized
-at load time, so `_default` path preserves baseline behavior.
+- checkpoint dir: `checkpoint/generalist_continued`
+- required contents:
+  - `params/`
+  - `assets/reasoning2action_sim_generalist/`
+  - `_CHECKPOINT_METADATA`
 
-Current stable defaults:
+Build/runtime notes:
 
-- Base checkpoint: `checkpoint/baseline/30000`
-- Routed adapter dir: `adapters/`
-- Clean-desktop specialist adapter: `adapters/clean_the_desktop_1500.npz`
-- Fallback adapter: `adapters/_default.npz` (can be empty)
-- Routing launch script: `scripts/server_submit_routed.sh`
-- Dockerfile: `scripts/docker/serve_policy.Dockerfile`
+- The image intentionally skips installing `lerobot` during `uv sync`; it is not required for checkpoint serving and caused unstable Git fetches during Docker builds.
+- `uv.lock` pins a CUDA 13 JAX stack for local RTX 5090 development. The Dockerfile replaces it with `jax[cuda12]==0.7.2` for the submission server.
+- `scripts/serve_policy.py` and `src/openpi/training/checkpoints.py` were adjusted so checkpoint serving does not import training-only dataset dependencies at process startup.
+- Full troubleshooting details are recorded in `AGENTS/generalist_v2_1_build_notes.md`.
 
-## 1) Stage checkpoint and adapters
+## 1) Stage checkpoint
 
-Copy trained specialist checkpoint from training machine:
-
-```bash
-rsync -avP -e "ssh -p 2222" /data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_clean_desktop/exp_specialist_clean/1500/params bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-clean-1500/checkpoint/specialists_clean_1500/
-rsync -avP -e "ssh -p 2222" /data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_clean_desktop/exp_specialist_clean/1500/assets bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-clean-1500/checkpoint/specialists_clean_1500/
-rsync -avP -e "ssh -p 2222" /data/admins/bingqi/Projects/ACoT-VLA/checkpoints/acot_specialist_clean_desktop/exp_specialist_clean/1500/_CHECKPOINT_METADATA bingqi@101.6.33.98:/mnt/SharedData/Research/submit-ACoT-VLA-specialists-clean-1500/checkpoint/specialists_clean_1500/
-```
-
-Extract adapter (if not yet extracted):
+Copy the trained generalist-v2.1 checkpoint from the training machine:
 
 ```bash
-uv run ./scripts/extract_adapter.py \
-    --checkpoint ./checkpoint/specialists_clean_1500/ \
-    --output ./adapters/clean_the_desktop_1500
+rsync -avP -e "ssh -p 2222" /home/bingqi/data/bingqi/Project/ACoT-VLA/checkpoints/acot_challenge_generalist_continued/generalist_continued/9000/params bingqi@101.6.33.98:/home/bingqi/SharedData/Research/submit-ACoT-VLA-generalists-v2/checkpoint/generalist_continued
+rsync -avP -e "ssh -p 2222" /home/bingqi/data/bingqi/Project/ACoT-VLA/checkpoints/acot_challenge_generalist_continued/generalist_continued/9000/assets bingqi@101.6.33.98:/home/bingqi/SharedData/Research/submit-ACoT-VLA-generalists-v2/checkpoint/generalist_continued
+rsync -avP -e "ssh -p 2222" /home/bingqi/data/bingqi/Project/ACoT-VLA/checkpoints/acot_challenge_generalist_continued/generalist_continued/9000/_CHECKPOINT_METADATA bingqi@101.6.33.98:/home/bingqi/SharedData/Research/submit-ACoT-VLA-generalists-v2/checkpoint/generalist_continued
 ```
 
 Required paths:
 
 ```bash
-ls checkpoint/baseline/30000/params
-ls checkpoint/baseline/30000/assets
-ls adapters/_default.npz
-ls adapters/clean_the_desktop_1500.npz
-```
-
-After adapter extraction, `checkpoint/specialists_clean_1500` is not required for this routed image.
-You can remove it to reduce build context and local disk usage:
-
-```bash
-rm -rf checkpoint/specialists_clean_1500
-```
-
-## 1.5) Build-context guard
-
-This repo excludes the specialist full checkpoint from build context:
-
-- `.dockerignore` includes: `checkpoint/specialists_clean_1500`
-
-Quick check:
-
-```bash
-grep -n "checkpoint/specialists_clean_1500" .dockerignore
+ls checkpoint/generalist_continued/params
+ls checkpoint/generalist_continued/assets/reasoning2action_sim_generalist
+ls checkpoint/generalist_continued/_CHECKPOINT_METADATA
 ```
 
 ## 2) Build image
 
 ```bash
 docker build --no-cache \
-    -f scripts/docker/serve_policy.Dockerfile \
-    -t routed-clean-desktop-1500:latest \
+    -f scripts/docker/serve_generalist_v2.Dockerfile \
+    -t generalist-v2.1:latest \
     .
 ```
 
@@ -85,25 +58,27 @@ docker build --no-cache \
 
 ```bash
 docker run -it --rm --network=host --gpus all \
-    -e XLA_PYTHON_CLIENT_MEM_FRACTION=0.3 \
-    routed-clean-desktop-1500:latest
+    -e XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 \
+    generalist-v2.1:latest
 ```
 
 Expected behavior:
 
 - container auto-starts server from `CMD`
 - websocket policy server listens on `8999`
+- serving path is `policy:checkpoint`
+- config is `acot_challenge_generalist_continued`
+- checkpoint path is `/submission/checkpoint/generalist_continued`
 - no runtime dependency sync/install (`uv run --no-sync` is expected)
-- no runtime checkpoint download
+- no adapter loading or route selection
 
 ## 4) Optional explicit env override test
 
 ```bash
 docker run -it --rm --network=host --gpus all \
-    -e ACOT_ROUTED_CONFIG=acot_challenge_lora_conservative \
-    -e ACOT_ROUTED_BASE_CHECKPOINT=/submission/checkpoint/baseline/30000 \
-    -e ACOT_ROUTED_ADAPTER_DIR=/submission/adapters \
-    routed-clean-desktop-1500:latest
+    -e ACOT_SERVE_CONFIG=acot_challenge_generalist_continued \
+    -e ACOT_SERVE_CHECKPOINT=/submission/checkpoint/generalist_continued \
+    generalist-v2.1:latest
 ```
 
 ## 5) Offline ICRA benchmark
@@ -118,7 +93,7 @@ cd /mnt/SharedData/Research/genie_sim
 ## 6) Tag and push
 
 ```bash
-docker tag routed-clean-desktop-1500:latest \
-    sim-icra-registry.cn-beijing.cr.aliyuncs.com/onecable/routed-clean-desktop-1500:latest
-docker push sim-icra-registry.cn-beijing.cr.aliyuncs.com/onecable/routed-clean-desktop-1500:latest
+docker tag generalist-v2.1:latest \
+    sim-icra-registry.cn-beijing.cr.aliyuncs.com/onecable/generalist-v2.1:latest
+docker push sim-icra-registry.cn-beijing.cr.aliyuncs.com/onecable/generalist-v2.1:latest
 ```

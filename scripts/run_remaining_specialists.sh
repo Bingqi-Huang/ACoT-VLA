@@ -13,9 +13,8 @@
 #   pour_workpiece 0.813 → CONDITIONAL          (train; only route if specialist > 0.813)
 #
 # Usage:
-#   export ACOT_CHALLENGE_DATA_ROOT=/ssd_workspace/huggingface/lerobot/Reasoning2Action-Sim
 #   export ACOT_CHALLENGE_GENERALIST_WEIGHTS=/abs/path/to/checkpoints/acot_challenge_generalist_continued/<exp>/<step>/params
-#   bash scripts/run_remaining_specialists.sh --sorting-exp <exp_name_used_for_sorting>
+#   bash scripts/run_remaining_specialists.sh --r2a-cache-root /path/to/r2a_cache
 #
 # Output adapters (all in adapters/):
 #   sorting.npz        DEFINITE  — always route
@@ -129,6 +128,7 @@ train_specialist() {
 
     # Launch training in background so we can poll for completion.
     bash scripts/train_fast_6gpu.sh "${config_name}" "${exp_name}" --overwrite \
+        --r2a-cache-root "${R2A_CACHE_ROOT}" \
         2>&1 | tee "logs/${config_name}_${exp_name}_$(date +%Y%m%d_%H%M%S).log" &
     local train_pid=$!
     log "Training process PID: ${train_pid}"
@@ -176,24 +176,27 @@ extract_adapter_npz() {
 # ---------------------------------------------------------------------------
 # Parse arguments
 # ---------------------------------------------------------------------------
+R2A_CACHE_ROOT=""
 GENERALIST_CKT_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --r2a-cache-root)  R2A_CACHE_ROOT="$2";          shift 2 ;;
         --generalist-ckpt) GENERALIST_CKT_OVERRIDE="$2"; shift 2 ;;
         *) die "Unknown argument: $1" ;;
     esac
 done
 
+[[ -n "${R2A_CACHE_ROOT}" ]] || die "--r2a-cache-root is required (path to cached dataset)"
+
 # ---------------------------------------------------------------------------
 # Validate environment
 # ---------------------------------------------------------------------------
-[[ -n "${ACOT_CHALLENGE_DATA_ROOT:-}" ]] || die "ACOT_CHALLENGE_DATA_ROOT is not set"
 [[ -n "${ACOT_CHALLENGE_GENERALIST_WEIGHTS:-}" ]] || \
     die "ACOT_CHALLENGE_GENERALIST_WEIGHTS is not set (point to generalist params/ dir)"
 
 log "Generalist weights: ${ACOT_CHALLENGE_GENERALIST_WEIGHTS}"
-log "Data root:          ${ACOT_CHALLENGE_DATA_ROOT}"
+log "R2A cache root:     ${R2A_CACHE_ROOT}"
 
 # ---------------------------------------------------------------------------
 # Step 1: sorting — already done manually. adapter at adapters/sorting.npz.

@@ -1365,7 +1365,7 @@ _REASONING2ACTION_SPECIALIST_SPECS: tuple[tuple[str, tuple[str, ...], tuple[str,
         ("Stock supermarket shelves  \nStraighten products  \nAttend ICRA conference  \nOperate SIM card",),
         3000,
     ),
-    ("acot_specialist_sorting", ("sorting_packages_part_1", "sorting_packages_part_2", "sorting_packages_part_3"), ("Sort packages",), 10000),
+    ("acot_specialist_sorting", ("sorting_packages_part_1", "sorting_packages_part_2", "sorting_packages_part_3"), ("Sort packages",), 3000),
     # clean_the_desktop_addition (211 ep, 568k frames) included alongside part_1 and part_2.
     (
         "acot_specialist_clean_desktop",

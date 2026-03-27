@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
+
 export DEBUG_MODE=false
 export WANDB_MODE=online
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.95

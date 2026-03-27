@@ -26,11 +26,22 @@
 
 set -euo pipefail
 
+# Keep an internal master log so the run can be diagnosed even if the caller's
+# stdout/stderr pipe is interrupted.
+RUN_START_TS="$(date +%Y%m%d_%H%M%S)"
+MASTER_LOG_FILE="${RUN_REMAINING_MASTER_LOG:-logs/run_remaining_specialists_${RUN_START_TS}.log}"
+mkdir -p "$(dirname "${MASTER_LOG_FILE}")"
+touch "${MASTER_LOG_FILE}"
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
-die() { log "ERROR: $*" >&2; exit 1; }
+log() {
+    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+    printf '%s\n' "${msg}" >> "${MASTER_LOG_FILE}"
+    printf '%s\n' "${msg}" || true
+}
+die() { log "ERROR: $*"; exit 1; }
 
 # Find the step with the lowest val_loss in a train_metrics.jsonl file.
 # Prints just the step number.
@@ -55,9 +66,16 @@ for line in p.read_text().splitlines():
     except json.JSONDecodeError:
         continue
     if "val_loss" in d and d["val_loss"] is not None:
+        step = d.get("step", d.get("train/step"))
+        if step is None:
+            continue
+        try:
+            step = int(step)
+        except Exception:
+            continue
         if d["val_loss"] < best_loss:
             best_loss = d["val_loss"]
-            best_step = d["step"]
+            best_step = step
 
 if best_step is None:
     print("", end="")
@@ -66,49 +84,87 @@ else:
 PYEOF
 }
 
-# Wait until a checkpoint step directory (with a params/ sub-dir) exists.
-wait_for_checkpoint() {
-    local ckpt_dir="$1"
-    local poll_interval="${2:-60}"
-    log "Waiting for checkpoint: ${ckpt_dir}"
-    while [[ ! -d "${ckpt_dir}/params" ]]; do
-        sleep "${poll_interval}"
-    done
-    log "Checkpoint ready: ${ckpt_dir}"
+# Returns "yes" if train_metrics.jsonl contains any entry with
+# step >= target_step, otherwise "no".
+metrics_reached_step() {
+    local metrics_file="$1"
+    local target_step="$2"
+    uv run python - <<PYEOF 2>/dev/null
+import json, pathlib
+
+p = pathlib.Path("${metrics_file}")
+target = int("${target_step}")
+
+if not p.exists():
+    print("no")
+    raise SystemExit(0)
+
+for line in p.read_text().splitlines():
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        d = json.loads(line)
+    except Exception:
+        continue
+    step = d.get("step", d.get("train/step"))
+    if step is None:
+        continue
+    try:
+        step = int(step)
+    except Exception:
+        continue
+    if step >= target:
+        print("yes")
+        break
+else:
+    print("no")
+PYEOF
 }
 
-# Wait until a training run has completed all its steps.
-# Completion is detected when train_metrics.jsonl contains an entry for
-# the final step (val_loss line at that step, or any entry >= target step).
-wait_for_training_done() {
+# Print the highest step seen in metrics file (either "step" or "train/step").
+latest_metrics_step() {
     local metrics_file="$1"
-    local final_step="$2"
-    local poll_interval="${3:-60}"
-    log "Waiting for training to reach step ${final_step} (metrics: ${metrics_file})"
-    while true; do
-        if [[ -f "${metrics_file}" ]]; then
-            # Check if any entry has step >= final_step
-            local found
-            found=$(uv run python - <<PYEOF 2>/dev/null
+    uv run python - <<PYEOF 2>/dev/null
 import json, pathlib
+
 p = pathlib.Path("${metrics_file}")
+if not p.exists():
+    print("", end="")
+    raise SystemExit(0)
+
+max_step = None
 for line in p.read_text().splitlines():
+    line = line.strip()
+    if not line:
+        continue
     try:
-        d = json.loads(line.strip())
-        if d.get("step", 0) >= ${final_step}:
-            print("yes")
-            break
+        d = json.loads(line)
     except Exception:
-        pass
+        continue
+    step = d.get("step", d.get("train/step"))
+    if step is None:
+        continue
+    try:
+        step = int(step)
+    except Exception:
+        continue
+    if max_step is None or step > max_step:
+        max_step = step
+
+if max_step is None:
+    print("", end="")
+else:
+    print(max_step, end="")
 PYEOF
-            )
-            if [[ "${found}" == "yes" ]]; then
-                log "Training complete (step ${final_step} found in metrics)."
-                break
-            fi
-        fi
-        sleep "${poll_interval}"
-    done
+}
+
+# Print the highest numeric checkpoint directory name under ckpt_base.
+latest_checkpoint_step() {
+    local ckpt_base="$1"
+    local step
+    step=$(ls -1 "${ckpt_base}" 2>/dev/null | rg '^[0-9]+$' | sort -n | tail -1 || true)
+    printf '%s' "${step}"
 }
 
 # Train a specialist config and wait for it to finish, then return the best ckpt path.
@@ -121,22 +177,59 @@ train_specialist() {
 
     local ckpt_base="checkpoints/${config_name}/${exp_name}"
     local metrics_file="${ckpt_base}/train_metrics.jsonl"
+    local final_step=$((num_steps - 1))
 
     log "========================================"
     log "Training: ${config_name}  exp=${exp_name}  steps=${num_steps}"
     log "========================================"
 
-    # Launch training in background so we can poll for completion.
-    bash scripts/train_fast_6gpu.sh "${config_name}" "${exp_name}" --overwrite \
-        --r2a-cache-root "${R2A_CACHE_ROOT}" \
-        2>&1 | tee "logs/${config_name}_${exp_name}_$(date +%Y%m%d_%H%M%S).log" &
-    local train_pid=$!
-    log "Training process PID: ${train_pid}"
+    # Avoid retraining completed stages when resuming the master script.
+    local already_done="no"
+    if [[ -f "${metrics_file}" ]]; then
+        already_done=$(metrics_reached_step "${metrics_file}" "${final_step}")
+    fi
 
-    # Wait for training to finish (process exit).
-    wait "${train_pid}" || true
+    if [[ "${already_done}" == "yes" ]]; then
+        log "Found existing completed run at step ${final_step}; skipping retrain."
+    else
+        local train_mode="overwrite"
+        local train_flag="--overwrite"
+        local last_ckpt_before
+        last_ckpt_before=$(latest_checkpoint_step "${ckpt_base}")
+        if [[ -n "${last_ckpt_before}" ]]; then
+            train_mode="resume"
+            train_flag="--resume"
+            log "Found existing checkpoint step ${last_ckpt_before}; using --resume."
+        fi
 
-    log "Training process exited for ${config_name}/${exp_name}."
+        # Keep training logs independent of caller stdout/stderr so a broken
+        # parent pipe does not terminate the subprocess.
+        local train_log="logs/${config_name}_${exp_name}_$(date +%Y%m%d_%H%M%S).log"
+        nohup bash scripts/train_fast_6gpu.sh "${config_name}" "${exp_name}" "${train_flag}" \
+            --r2a-cache-root "${R2A_CACHE_ROOT}" \
+            >> "${train_log}" 2>&1 &
+        local train_pid=$!
+        log "Training process PID: ${train_pid} (mode=${train_mode}, log=${train_log})"
+
+        # Wait for training to finish (process exit).
+        local train_rc=0
+        if wait "${train_pid}"; then
+            train_rc=0
+        else
+            train_rc=$?
+        fi
+        log "Training process exited for ${config_name}/${exp_name} (exit_code=${train_rc})."
+
+        local reached
+        reached=$(metrics_reached_step "${metrics_file}" "${final_step}")
+        if [[ "${reached}" != "yes" ]]; then
+            local last_metrics
+            local last_ckpt_after
+            last_metrics=$(latest_metrics_step "${metrics_file}")
+            last_ckpt_after=$(latest_checkpoint_step "${ckpt_base}")
+            die "Training stopped before step ${final_step}. last_metrics_step=${last_metrics:-none}, last_checkpoint_step=${last_ckpt_after:-none}, exit_code=${train_rc}, train_log=${train_log}"
+        fi
+    fi
 
     # Find best val_loss checkpoint.
     local best_step
@@ -144,7 +237,7 @@ train_specialist() {
     if [[ -z "${best_step}" ]]; then
         log "WARNING: No val_loss entries found in ${metrics_file}. Using last checkpoint."
         # Fall back to the highest available step directory.
-        best_step=$(ls -1 "${ckpt_base}" 2>/dev/null | grep -E '^[0-9]+$' | sort -n | tail -1 || echo "")
+        best_step=$(latest_checkpoint_step "${ckpt_base}")
     fi
 
     if [[ -z "${best_step}" ]]; then

@@ -18,6 +18,64 @@ Immediate next step:
 
 ## Current Note
 
+Date: 2026-03-28
+
+Author: GitHub Copilot (GPT-5.3-Codex)
+
+What changed:
+
+- Fixed v3 serving startup regression where checkpoint mode imported training-only `lerobot` deps.
+- Restored prior working import behavior from `submitted-generalist-v2` style:
+  - `scripts/serve_policy.py` now lazily imports routed policy only in `AdapterRouted` case.
+  - `src/openpi/training/checkpoints.py` now imports `data_loader` only under `TYPE_CHECKING`.
+
+What was verified:
+
+- `python -m py_compile scripts/serve_policy.py src/openpi/training/checkpoints.py` passes.
+- Rebuilt `generalist-v3:latest` with `scripts/docker/serve_generalist_v3.Dockerfile`.
+- Runtime smoke test (`docker run --network=host --gpus all ... generalist-v3:latest`) now succeeds through:
+  - checkpoint restore
+  - norm-stats load from checkpoint assets
+  - websocket server bind (`0.0.0.0:8999`)
+- No `ModuleNotFoundError: No module named 'lerobot'` after fix.
+
+What is still broken or unknown:
+
+- End-to-end evaluator request/response test was not run in this session; only startup smoke test was validated.
+
+Immediate next step:
+
+- Run one real websocket inference request against port `8999` to validate action output schema in addition to startup health.
+
+Date: 2026-03-28
+
+Author: GitHub Copilot (GPT-5.3-Codex)
+
+What changed:
+
+- Created branch `submitted-generalist-v3` from `origin/feature/generalist-continued-training`.
+- Kept current `AGENTS/docker_build.md` content while changing branch base.
+- Added missing generalist submission serving files from prior submit branch pattern:
+  - `scripts/server_submit_generalist_v2.sh`
+  - `scripts/docker/serve_generalist_v2.Dockerfile`
+- Updated defaults in both files to serve reweighted continued-training checkpoints:
+  - config: `acot_challenge_generalist_continued_reweighted`
+  - checkpoint dir: `/submission/checkpoint/generalist_continued_augumented`
+
+What was verified:
+
+- `bash -n scripts/server_submit_generalist_v2.sh` passes.
+- Reweighted config is present in training config registry and referenced by the new serve launcher + Dockerfile.
+
+What is still broken or unknown:
+
+- Full `docker build` and container runtime smoke test were not executed in this session.
+- `AGENTS/docker_build.md` still contains mixed historical naming (`v2.1` labels and `generalist-v3` image tag); file was intentionally preserved per request.
+
+Immediate next step:
+
+- Run `docker build -f scripts/docker/serve_generalist_v2.Dockerfile -t generalist-v3:latest .` then start container and verify websocket server startup on port `8999`.
+
 Date: 2026-03-21
 
 Author: Codex

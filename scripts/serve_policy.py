@@ -6,7 +6,6 @@ import socket
 import tyro
 
 from openpi.policies import policy as _policy
-from openpi.policies import adapter_routed_policy as _adapter_routed_policy
 from openpi.policies import policy_config as _policy_config
 from openpi.serving import websocket_policy_server
 from openpi.training import config as _config
@@ -119,6 +118,7 @@ def create_policy(args: Args) -> _policy.Policy:
                 _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
             )
         case AdapterRouted():
+            from openpi.policies import adapter_routed_policy as _adapter_routed_policy
             return _adapter_routed_policy.create_adapter_routed_policy(
                 _config.get_config(args.policy.config),
                 args.policy.base_checkpoint,

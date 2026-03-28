@@ -4,7 +4,7 @@ import asyncio
 import concurrent.futures as futures
 import dataclasses
 import logging
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from etils import epath
 import jax
@@ -13,7 +13,9 @@ import orbax.checkpoint.future as future
 
 from openpi.shared import array_typing as at
 import openpi.shared.normalize as _normalize
-import openpi.training.data_loader as _data_loader
+if TYPE_CHECKING:
+    import openpi.training.data_loader as _data_loader
+
 import openpi.training.utils as training_utils
 
 
@@ -72,7 +74,7 @@ def initialize_checkpoint_dir(
 def save_state(
     checkpoint_manager: ocp.CheckpointManager,
     state: training_utils.TrainState,
-    data_loader: _data_loader.DataLoader,
+    data_loader: "_data_loader.DataLoader",
     step: int,
 ):
     asset_dir = checkpoint_manager.directory / f"{step}" / "assets"
@@ -102,7 +104,7 @@ def save_state(
 def restore_state(
     checkpoint_manager: ocp.CheckpointManager,
     state: training_utils.TrainState,
-    data_loader: _data_loader.DataLoader,
+    data_loader: "_data_loader.DataLoader",
     step: int | None = None,
 ) -> training_utils.TrainState:
     del data_loader

@@ -1,6 +1,44 @@
 # Status
 
-Last updated: 2026-03-21
+Last updated: 2026-03-28
+
+## Session 2026-03-28: Fix lerobot import regression in v3 serving image
+
+- Symptom:
+  - `docker run ... generalist-v3:latest` failed at startup with `ModuleNotFoundError: No module named 'lerobot'`.
+- Root cause:
+  - `scripts/serve_policy.py` imported `adapter_routed_policy` at module import time.
+  - `src/openpi/training/checkpoints.py` imported `openpi.training.data_loader` at runtime import time.
+  - This created a startup import chain into training-only `lerobot` even for `policy:checkpoint` serving.
+- Fix (aligned to prior `submitted-generalist-v2` behavior):
+  - `scripts/serve_policy.py`: restore lazy import of `adapter_routed_policy` only inside `AdapterRouted` branch.
+  - `src/openpi/training/checkpoints.py`: guard `data_loader` import behind `TYPE_CHECKING` and use string type annotations.
+- Validation:
+  - `python -m py_compile scripts/serve_policy.py src/openpi/training/checkpoints.py`
+  - rebuilt image with `scripts/docker/serve_generalist_v3.Dockerfile`
+  - container smoke test now reaches checkpoint restore and websocket startup:
+    - `server listening on 0.0.0.0:8999`
+  - no `lerobot` import error after fix.
+
+## Session 2026-03-28: submitted-generalist-v3 branch setup from continued-training
+
+- Created local branch:
+  - `submitted-generalist-v3`
+  - base: `origin/feature/generalist-continued-training`
+- Preserved current `AGENTS/docker_build.md` content while switching base branch.
+- Confirmed reweighted continued-training config is present in branch code:
+  - `acot_challenge_generalist_continued_reweighted` in `src/openpi/training/config.py`
+- Added submission-serving files missing from the feature branch:
+  - `scripts/server_submit_generalist_v2.sh`
+  - `scripts/docker/serve_generalist_v2.Dockerfile`
+- Wired these serving files to reweighted defaults:
+  - `ACOT_SERVE_CONFIG=acot_challenge_generalist_continued_reweighted`
+  - `ACOT_SERVE_CHECKPOINT=/submission/checkpoint/generalist_continued_augumented`
+- Build-time install strategy in the Dockerfile remains aligned with prior submission path:
+  - `uv sync --frozen --no-dev --no-install-package lerobot`
+- Basic validation completed:
+  - `bash -n scripts/server_submit_generalist_v2.sh`
+  - grep checks confirm reweighted config string in launcher + Dockerfile + config registry.
 
 ## Session 2026-03-21: Blackwell CUDA illegal-address fix for continued generalist training
 

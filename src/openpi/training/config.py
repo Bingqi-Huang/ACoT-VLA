@@ -2743,6 +2743,89 @@ _CONFIGS = [
             freeze_dual_ae=[False, False],
         ),
     ),
+    TrainConfig(
+        name="acot_challenge_generalist_continued_v3",
+        model=acot_vla.ACOTConfig(
+            coarse_action_horizon=30,
+            action_horizon=30,
+            paligemma_variant="gemma_2b_lora",
+            coarse_action_expert_variant="gemma_300m",
+            action_expert_variant="gemma_300m",
+            adopt_explicit_action_reasoner=True,
+            adopt_implicit_action_reasoner=True,
+            downsample_based_implicit_extractor=True,
+            max_token_len=210,
+            # Keep Go2 action-mask semantics: train dims 0-15 and 20; exclude 16-19 and padded tail.
+            action_loss_mask=tuple(_transforms.make_bool_mask(16, -4, 1, -11)),
+        ),
+        data=dataclasses.replace(
+            _reasoning2action_data_config(
+                _reasoning2action_repo_ids(
+                    # Base set (1x each)
+                    "pour_workpiece",
+                    "open_door",
+                    "scoop_popcorn",
+                    "scoop_popcorn_part_2",
+                    "hold_pot",
+                    "place_block_into_box",
+                    "take_wrong_item_shelf",
+                    "stock_and_straighten_shelf",
+                    "stock_and_straighten_shelf_part_2",
+                    "sorting_packages_part_1",
+                    "sorting_packages_part_2",
+                    "sorting_packages_part_3",
+                    "clean_the_desktop_addition",
+                    "clean_the_desktop_part_1",
+                    "clean_the_desktop_part_2",
+                    # Reweight T1 (sorting) 2x
+                    "sorting_packages_part_1",
+                    "sorting_packages_part_2",
+                    "sorting_packages_part_3",
+                    # Reweight T3 (pour_workpiece) 2x
+                    "pour_workpiece",
+                    # Reweight T8 (place_block) 2x
+                    "place_block_into_box",
+                ),
+                asset_id=os.getenv("ACOT_CHALLENGE_GENERALIST_ASSET_ID", "reasoning2action_sim_generalist"),
+                split_name="acot_challenge_generalist_continued_v3",
+            ),
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=500,
+            peak_lr=2e-5,
+            decay_steps=20_000,
+            decay_lr=2e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
+            os.getenv(
+                "ACOT_CHALLENGE_INIT_WEIGHTS",
+                "gs://openpi-assets/checkpoints/pi05_base/params",
+            ),
+            missing_init="lora_standard",
+        ),
+        num_train_steps=15_000,
+        save_interval=2_000,
+        val_interval=2_000,
+        val_num_batches=32,
+        num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        batch_size=384 if not os.getenv("DEBUG_MODE", default=False) == "true" else 16,
+        grad_accum_steps=1,
+        freeze_filter=acot_vla.ACOTConfig(
+            paligemma_variant="gemma_2b_lora",
+            coarse_action_expert_variant="gemma_300m",
+            action_expert_variant="gemma_300m",
+        ).get_freeze_filter(
+            freeze_vision=True,          # KEY CHANGE: freeze vision encoder
+            freeze_llm=True,
+            freeze_llm_embedder=True,
+            freeze_dual_ae=[False, False],
+        ),
+    ),
+
+
+
     # A dummy smoke run with only 1 task (2 parts)
     TrainConfig(
         name="acot_challenge_generalist_lora_clean_desktop",

@@ -272,6 +272,9 @@ class ACOTConfig(_model.BaseModelConfig):
 
     # Set the model specific defaults.
     action_dim: int = 32
+    # Boolean mask of shape (action_dim,) indicating which dims are real actions.
+    # If None, all dims are treated as real.
+    action_loss_mask: tuple[bool, ...] | None = None
     coarse_action_horizon: int = 50
     action_horizon: int = 30
     max_token_len: int = None  # type: ignore
@@ -381,6 +384,20 @@ class ACOT_VLA(_model.BaseModel):
     def __init__(self, config: ACOTConfig, rngs: nnx.Rngs):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
         self.pi05 = config.pi05
+        # Keep this as pure Python metadata (not a JAX array) so nnx.state() can
+        # flatten the module under jax.eval_shape without tracer-array leaves.
+        if config.action_loss_mask is not None:
+            if len(config.action_loss_mask) != config.action_dim:
+                raise ValueError(
+                    f"action_loss_mask length ({len(config.action_loss_mask)}) must match action_dim ({config.action_dim})."
+                )
+            self.action_loss_mask = tuple(bool(x) for x in config.action_loss_mask)
+            self.action_loss_mask_count = sum(self.action_loss_mask)
+            if self.action_loss_mask_count <= 0:
+                raise ValueError("action_loss_mask must include at least one True dimension.")
+        else:
+            self.action_loss_mask = None
+            self.action_loss_mask_count = None
 
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         coarse_action_expert_config = _gemma.get_config(config.coarse_action_expert_variant)
@@ -811,13 +828,32 @@ class ACOT_VLA(_model.BaseModel):
         )
 
         action_diff_expert = u_expert_t - v_expert_t
+        if self.action_loss_mask is not None:
+            # Only compute loss on real (non-masked) action dimensions.
+            mask = jnp.asarray(self.action_loss_mask, dtype=action_diff_expert.dtype)[None, None, :]
+            action_diff_expert = action_diff_expert * mask
+            assert self.action_loss_mask_count is not None
+            normalizer = self.action_loss_mask_count
+            expert_loss = jnp.sum(jnp.square(action_diff_expert)) / (
+                normalizer * action_diff_expert.shape[0] * action_diff_expert.shape[1]
+            )
+        else:
+            expert_loss = jnp.mean(jnp.square(action_diff_expert))
+
         if self.adopt_explicit_action_reasoner:
             assert v_ref_t is not None
             assert u_ref_t is not None
             action_diff_ref = u_ref_t - v_ref_t
-            return jnp.mean(jnp.square(action_diff_ref)) + jnp.mean(jnp.square(action_diff_expert))
+            if self.action_loss_mask is not None:
+                action_diff_ref = action_diff_ref * mask
+                ref_loss = jnp.sum(jnp.square(action_diff_ref)) / (
+                    normalizer * action_diff_ref.shape[0] * action_diff_ref.shape[1]
+                )
+            else:
+                ref_loss = jnp.mean(jnp.square(action_diff_ref))
+            return expert_loss + ref_loss
 
-        return jnp.mean(jnp.square(action_diff_expert))
+        return expert_loss
 
     def compute_loss_per_example(
         self,
@@ -845,11 +881,30 @@ class ACOT_VLA(_model.BaseModel):
             expert_action_noise=expert_action_noise,
         )
 
-        loss_per_example = jnp.mean(jnp.square(u_expert_t - v_expert_t), axis=(-1, -2))
+        action_diff_expert = u_expert_t - v_expert_t
+        if self.action_loss_mask is not None:
+            mask = jnp.asarray(self.action_loss_mask, dtype=action_diff_expert.dtype)[None, None, :]
+            action_diff_expert = action_diff_expert * mask
+            assert self.action_loss_mask_count is not None
+            normalizer = self.action_loss_mask_count
+            loss_per_example = jnp.sum(jnp.square(action_diff_expert), axis=(-1, -2)) / (
+                normalizer * action_diff_expert.shape[1]
+            )
+        else:
+            loss_per_example = jnp.mean(jnp.square(action_diff_expert), axis=(-1, -2))
+
         if self.adopt_explicit_action_reasoner:
             assert v_ref_t is not None
             assert u_ref_t is not None
-            loss_per_example = loss_per_example + jnp.mean(jnp.square(u_ref_t - v_ref_t), axis=(-1, -2))
+            action_diff_ref = u_ref_t - v_ref_t
+            if self.action_loss_mask is not None:
+                action_diff_ref = action_diff_ref * mask
+                ref_loss_per_example = jnp.sum(jnp.square(action_diff_ref), axis=(-1, -2)) / (
+                    normalizer * action_diff_ref.shape[1]
+                )
+            else:
+                ref_loss_per_example = jnp.mean(jnp.square(action_diff_ref), axis=(-1, -2))
+            loss_per_example = loss_per_example + ref_loss_per_example
         return loss_per_example
 
     def teacher_force_actions(
